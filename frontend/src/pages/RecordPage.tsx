@@ -20,9 +20,22 @@ import {
   FileText,
   Clock,
   ArrowRight,
+  Upload,
+  Key,
+  ExternalLink,
 } from 'lucide-react';
 import { EngineType, Transcription, UserSettings, SUPPORTED_LANGUAGES, LanguageOption } from '../types';
-import { WS_BASE_URL, createTranscription, uploadAudio, getOrCreateSessionId, getExportUrl } from '../services/api';
+import {
+  WS_BASE_URL,
+  createTranscription,
+  uploadAudio,
+  getOrCreateSessionId,
+  getExportUrl,
+  transcribeAudioFile,
+  updateTranscription,
+  getStoredGeminiKey,
+  setStoredGeminiKey,
+} from '../services/api';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { useWebSpeech } from '../hooks/useWebSpeech';
 import { AudioPlayer } from '../components/AudioPlayer';
@@ -41,7 +54,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({
   onNavigateToHistory,
 }) => {
   const [selectedLanguage, setSelectedLanguage] = useState(settings.default_language || 'en-IN');
-  const [activeEngine, setActiveEngine] = useState<EngineType>(settings.default_engine || 'gemini-live');
+  const [activeEngine, setActiveEngine] = useState<EngineType>(settings.default_engine || 'browser-webspeech');
   const [engineFallbackNotice, setEngineFallbackNotice] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState('');
   const [isEditingTranscript, setIsEditingTranscript] = useState(false);
@@ -50,13 +63,17 @@ export const RecordPage: React.FC<RecordPageProps> = ({
   const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
   const [savedTranscription, setSavedTranscription] = useState<Transcription | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [langModalOpen, setLangModalOpen] = useState(false);
   const [langSearch, setLangSearch] = useState('');
+  const [geminiModalOpen, setGeminiModalOpen] = useState(false);
+  const [geminiKeyInput, setGeminiKeyInput] = useState(getStoredGeminiKey());
 
   const wsRef = useRef<WebSocket | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -113,7 +130,8 @@ export const RecordPage: React.FC<RecordPageProps> = ({
   const connectGeminiWebSocket = useCallback((): Promise<boolean> => {
     return new Promise((resolve) => {
       const sessionId = getOrCreateSessionId();
-      const wsUrl = `${WS_BASE_URL}?session_id=${sessionId}&language=${selectedLanguage}&engine=gemini-live`;
+      const geminiKey = getStoredGeminiKey();
+      const wsUrl = `${WS_BASE_URL}?session_id=${sessionId}&language=${selectedLanguage}&engine=gemini-live${geminiKey ? `&gemini_key=${encodeURIComponent(geminiKey)}` : ''}`;
       const ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
 
@@ -123,6 +141,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({
           action: 'start',
           language: selectedLanguage,
           engine: 'gemini-live',
+          gemini_key: geminiKey || undefined,
         }));
         resolve(true);
       };
@@ -134,16 +153,12 @@ export const RecordPage: React.FC<RecordPageProps> = ({
             setLiveTranscript((prev) => (prev ? prev + ' ' + data.text : data.text));
           } else if (data.type === 'fallback_notice') {
             setEngineFallbackNotice(data.message);
-            setActiveEngine('browser-webspeech');
-            startWebSpeech(selectedLanguage);
           }
         } catch {}
       };
 
       ws.onerror = () => {
-        setEngineFallbackNotice('Gemini Live WebSocket notice. Seamlessly using Web Speech API fallback.');
-        setActiveEngine('browser-webspeech');
-        startWebSpeech(selectedLanguage);
+        setEngineFallbackNotice('Gemini Live WebSocket notice. Seamlessly using Web Speech API.');
         resolve(false);
       };
 
@@ -151,7 +166,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({
         wsRef.current = null;
       };
     });
-  }, [selectedLanguage, startWebSpeech]);
+  }, [selectedLanguage]);
 
   // START RECORDING
   const handleStartRecording = async () => {
@@ -163,18 +178,25 @@ export const RecordPage: React.FC<RecordPageProps> = ({
     setSessionTitle('');
     resetWebSpeech();
 
-    const micStarted = await startMic();
-    if (!micStarted) return;
+    // 1. Always start Web Speech API for immediate live speech transcription
+    startWebSpeech(selectedLanguage);
 
+    // 2. Start microphone recording & waveform
+    const micStarted = await startMic();
+    if (!micStarted) {
+      stopWebSpeech();
+      return;
+    }
+
+    // 3. Connect to Gemini Live if selected
     if (activeEngine === 'gemini-live') {
       await connectGeminiWebSocket();
-    } else {
-      startWebSpeech(selectedLanguage);
     }
   };
 
   // STOP RECORDING
   const handleStopRecording = async () => {
+    stopWebSpeech();
     const { audioBlob, duration: finalDuration } = await stopMic();
 
     if (wsRef.current) {
@@ -184,7 +206,6 @@ export const RecordPage: React.FC<RecordPageProps> = ({
       } catch {}
       wsRef.current = null;
     }
-    stopWebSpeech();
 
     if (audioBlob) {
       setRecordedAudioBlob(audioBlob);
@@ -192,14 +213,138 @@ export const RecordPage: React.FC<RecordPageProps> = ({
       setRecordedAudioUrl(url);
     }
 
-    if (settings.auto_copy_on_stop && liveTranscript.trim()) {
-      navigator.clipboard.writeText(liveTranscript);
+    let currentText = liveTranscript.trim();
+
+    // If live transcript is empty and audio was captured, automatically convert audio to text via Gemini!
+    if (!currentText && audioBlob) {
+      const storedKey = getStoredGeminiKey();
+      if (storedKey) {
+        try {
+          setIsTranscribingAudio(true);
+          showToast('🔄 Converting audio to text with Gemini AI...');
+          const res = await transcribeAudioFile(audioBlob, selectedLanguage, storedKey);
+          if (res && res.text) {
+            currentText = res.text;
+            setLiveTranscript(res.text);
+            showToast('✓ Audio converted to text!');
+          }
+        } catch (err) {
+          console.warn('Auto audio-to-text error:', err);
+        } finally {
+          setIsTranscribingAudio(false);
+        }
+      }
+    }
+
+    if (settings.auto_copy_on_stop && currentText) {
+      navigator.clipboard.writeText(currentText);
       showToast('Copied to clipboard!');
     }
 
     // Auto-save if enabled
-    if (settings.auto_save && liveTranscript.trim()) {
-      await performSave(liveTranscript.trim(), audioBlob, finalDuration);
+    if (settings.auto_save && currentText) {
+      await performSave(currentText, audioBlob, finalDuration);
+    }
+  };
+
+  // Convert audio file directly into text with Gemini AI
+  const handleConvertAudioToText = async () => {
+    if (!recordedAudioBlob) {
+      showToast('No audio recording found to convert!');
+      return;
+    }
+    const storedKey = getStoredGeminiKey();
+    if (!storedKey) {
+      setGeminiModalOpen(true);
+      return;
+    }
+    try {
+      setIsTranscribingAudio(true);
+      showToast('🔄 Converting audio to text with Gemini AI...');
+      const res = await transcribeAudioFile(recordedAudioBlob, selectedLanguage, storedKey);
+      if (res && res.text) {
+        setLiveTranscript(res.text);
+        showToast('✓ Audio converted to text successfully!');
+        if (savedTranscription) {
+          const updated = await updateTranscription(savedTranscription.id, { text: res.text });
+          setSavedTranscription(updated);
+        } else if (settings.auto_save) {
+          await performSave(res.text, recordedAudioBlob);
+        }
+      } else {
+        showToast('No speech detected in this audio recording.');
+      }
+    } catch (err: any) {
+      console.warn('Audio-to-text error:', err);
+      showToast('Audio conversion notice: ' + (err?.message || 'Server processing'));
+    } finally {
+      setIsTranscribingAudio(false);
+    }
+  };
+
+  // Upload an existing audio file (.mp3, .wav, .m4a, .webm) and convert to text
+  const handleAudioFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setRecordedAudioBlob(file);
+    const url = URL.createObjectURL(file);
+    setRecordedAudioUrl(url);
+
+    const baseName = file.name.replace(/\.[^/.]+$/, '');
+    setSessionTitle(baseName);
+
+    const storedKey = getStoredGeminiKey();
+    if (!storedKey) {
+      showToast('Audio file loaded! Please add your Gemini API Key to convert to text.');
+      setGeminiModalOpen(true);
+      return;
+    }
+
+    try {
+      setIsTranscribingAudio(true);
+      showToast('🔄 Converting uploaded audio to text with Gemini AI...');
+      const res = await transcribeAudioFile(file, selectedLanguage, storedKey);
+      if (res && res.text) {
+        setLiveTranscript(res.text);
+        showToast('✓ Audio converted to text successfully!');
+        if (settings.auto_save) {
+          await performSave(res.text, file, 0);
+        }
+      } else {
+        showToast('No speech detected in uploaded audio.');
+      }
+    } catch (err: any) {
+      showToast('Audio conversion notice: ' + (err?.message || 'Server error'));
+    } finally {
+      setIsTranscribingAudio(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (!liveTranscript.trim()) {
+      showToast('No transcript text to export yet!');
+      return;
+    }
+    try {
+      showToast('Generating PDF...');
+      let id = savedTranscription?.id;
+      if (!id) {
+        const saved = await createTranscription({
+          title: sessionTitle.trim() || undefined,
+          text: liveTranscript.trim(),
+          language: selectedLanguage,
+          engine: activeEngine,
+          duration_seconds: duration,
+        });
+        setSavedTranscription(saved);
+        id = saved.id;
+      }
+      const pdfUrl = getExportUrl(id, 'pdf');
+      window.open(pdfUrl, '_blank');
+    } catch (err: any) {
+      showToast('PDF export notice: ' + (err?.message || 'Server error'));
     }
   };
 
@@ -345,17 +490,30 @@ export const RecordPage: React.FC<RecordPageProps> = ({
         </div>
 
         {/* Engine Switcher & Status */}
-        <div className="flex flex-col items-center gap-1.5 mb-5">
-          <div className="flex items-center gap-2 text-[11px] font-mono">
+        <div className="flex flex-col items-center gap-2 mb-5">
+          <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono">
             <span className="text-cyber-muted">Engine:</span>
             <button
               onClick={() => setActiveEngine(activeEngine === 'gemini-live' ? 'browser-webspeech' : 'gemini-live')}
-              className="px-2.5 py-0.5 rounded-full bg-black/60 border border-cyber-primary/30 text-cyber-primary hover:border-cyber-primary transition-colors flex items-center gap-1 cursor-pointer"
+              className="px-2.5 py-1 rounded-full bg-black/60 border border-cyber-primary/30 text-cyber-primary hover:border-cyber-primary transition-colors flex items-center gap-1 cursor-pointer"
               title="Click to toggle speech engine"
             >
               <Cpu className="w-3 h-3" />
               <span>{activeEngine === 'gemini-live' ? '⚡ Gemini Live API' : '🌐 Browser Web Speech'}</span>
               <span className="text-[9px] text-cyber-muted">(Switch)</span>
+            </button>
+
+            <button
+              onClick={() => setGeminiModalOpen(true)}
+              className={`px-2.5 py-1 rounded-full border text-[11px] font-mono flex items-center gap-1 transition-colors ${
+                getStoredGeminiKey()
+                  ? 'bg-cyan-950/60 border-cyber-accent text-cyber-accent hover:bg-cyan-900'
+                  : 'bg-black/60 border-cyber-primary/30 text-cyber-muted hover:text-cyber-primary'
+              }`}
+              title="Configure Google Gemini API Key for AI features"
+            >
+              <Key className="w-3 h-3 text-cyber-accent" />
+              <span>{getStoredGeminiKey() ? '✓ Gemini Key' : '+ Gemini Key'}</span>
             </button>
           </div>
           {engineFallbackNotice && (
@@ -528,17 +686,16 @@ export const RecordPage: React.FC<RecordPageProps> = ({
               <span>Share</span>
             </button>
 
-            {/* Download Audio (when recorded) */}
-            {recordedAudioBlob && (
-              <button
-                onClick={handleDownloadLocalAudio}
-                className="px-3 py-1.5 rounded-xl bg-black/50 border border-cyber-primary/30 hover:bg-cyber-primary/20 text-cyber-primary text-xs font-mono flex items-center gap-1.5 transition-colors"
-                title="Download recorded audio file"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Audio</span>
-              </button>
-            )}
+            {/* PDF Export Button */}
+            <button
+              onClick={handleExportPdf}
+              disabled={!liveTranscript.trim()}
+              className="px-3 py-1.5 rounded-xl bg-black/50 border border-cyber-accent/40 hover:bg-cyber-accent/20 text-cyber-accent text-xs font-mono flex items-center gap-1.5 transition-colors disabled:opacity-40"
+              title="Download formatted PDF transcript"
+            >
+              <FileDown className="w-3.5 h-3.5 text-cyber-accent" />
+              <span>PDF</span>
+            </button>
 
             {/* Download Text */}
             <button
@@ -550,6 +707,49 @@ export const RecordPage: React.FC<RecordPageProps> = ({
               <FileDown className="w-3.5 h-3.5" />
               <span>TXT</span>
             </button>
+
+            {/* Convert Audio to Text Button (when audio is recorded or uploaded) */}
+            {recordedAudioBlob && (
+              <button
+                onClick={handleConvertAudioToText}
+                disabled={isTranscribingAudio}
+                className="px-3 py-1.5 rounded-xl bg-cyan-950/70 border border-cyber-accent text-cyber-accent text-xs font-mono flex items-center gap-1.5 hover:bg-cyan-900 transition-colors"
+                title="Convert recorded or uploaded audio directly to text with Gemini AI"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${isTranscribingAudio ? 'animate-spin' : ''}`} />
+                <span>{isTranscribingAudio ? 'Converting...' : 'Audio → Text'}</span>
+              </button>
+            )}
+
+            {/* Upload Audio File to Convert */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleAudioFileUpload}
+              accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg,.aac"
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isTranscribingAudio}
+              className="px-3 py-1.5 rounded-xl bg-black/50 border border-cyber-accent/40 hover:bg-cyber-accent/20 text-cyber-accent text-xs font-mono flex items-center gap-1.5 transition-colors"
+              title="Upload an audio file (.mp3, .wav, .m4a) to convert to text"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Upload Audio</span>
+            </button>
+
+            {/* Download Audio (when recorded) */}
+            {recordedAudioBlob && (
+              <button
+                onClick={handleDownloadLocalAudio}
+                className="px-3 py-1.5 rounded-xl bg-black/50 border border-cyber-primary/30 hover:bg-cyber-primary/20 text-cyber-primary text-xs font-mono flex items-center gap-1.5 transition-colors"
+                title="Download recorded audio file"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Audio</span>
+              </button>
+            )}
           </div>
 
           {/* MAIN PROMINENT SAVE RECORDING BUTTON */}
@@ -690,6 +890,74 @@ export const RecordPage: React.FC<RecordPageProps> = ({
           onClose={() => setShowShareModal(false)}
           onUpdate={(updated) => setSavedTranscription(updated)}
         />
+      )}
+      {/* Google Gemini API Key Modal */}
+      {geminiModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-md bg-cyber-card border border-cyber-accent/40 rounded-28 p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-cyber-accent/20 pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-cyber-accent" />
+                <h3 className="text-base font-bold text-cyber-text">Google Gemini AI Key</h3>
+              </div>
+              <button
+                onClick={() => setGeminiModalOpen(false)}
+                className="p-1 rounded-lg hover:bg-white/10 text-cyber-muted hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-cyber-muted leading-relaxed">
+              Enter your Google Gemini API Key to enable instant AI audio file conversion (Tamil, English, Hindi), live WebSocket streaming, and AI Summaries.
+            </p>
+
+            <a
+              href="https://aistudio.google.com/app/apikey"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between p-3 rounded-xl bg-cyan-950/40 border border-cyber-accent/30 text-cyber-accent text-xs hover:bg-cyan-950/70 transition-colors"
+            >
+              <span className="font-semibold">Get a Free Gemini API Key (Google AI Studio)</span>
+              <ExternalLink className="w-4 h-4 shrink-0" />
+            </a>
+
+            <div className="space-y-1">
+              <label className="text-xs text-cyber-muted font-mono">Paste API Key</label>
+              <input
+                type="password"
+                placeholder="AIzaSy..."
+                value={geminiKeyInput}
+                onChange={(e) => setGeminiKeyInput(e.target.value)}
+                className="w-full bg-black/60 border border-cyber-primary/40 rounded-xl px-3 py-2 text-xs text-cyber-primary font-mono focus:outline-none focus:border-cyber-accent"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => {
+                  setStoredGeminiKey(geminiKeyInput);
+                  setGeminiModalOpen(false);
+                  showToast('✓ Gemini API Key saved successfully!');
+                  if (recordedAudioBlob) {
+                    handleConvertAudioToText();
+                  }
+                }}
+                disabled={!geminiKeyInput.trim()}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-cyber-primary text-black font-bold text-xs tracking-wide uppercase hover:bg-cyan-300 transition-colors disabled:opacity-40"
+              >
+                Save & Convert
+              </button>
+              <button
+                onClick={() => setGeminiModalOpen(false)}
+                className="py-2.5 px-4 rounded-xl bg-black/40 border border-gray-700 text-gray-300 text-xs hover:bg-gray-800 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

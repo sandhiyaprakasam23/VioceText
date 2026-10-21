@@ -27,7 +27,7 @@ export function useWebSpeech({
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
   const shouldListenRef = useRef(false);
-  const accumulatedTextRef = useRef('');
+  const fullTranscriptRef = useRef('');
 
   // Check browser support
   const isSupported = typeof window !== 'undefined' && Boolean(
@@ -45,7 +45,7 @@ export function useWebSpeech({
       const recognition = new SpeechRecognitionClass();
       
       const targetLang = initialLanguage || language;
-      recognition.lang = targetLang === 'multilingual' ? 'en-IN' : targetLang;
+      recognition.lang = targetLang === 'multilingual' ? 'ta-IN' : targetLang;
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
@@ -58,35 +58,38 @@ export function useWebSpeech({
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let interimTranscript = '';
-        let finalChunk = '';
+        let currentSessionFinal = '';
 
         for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalChunk += transcript + ' ';
-          } else {
-            interimTranscript += transcript;
+          const item = event.results[i];
+          if (item && item[0]) {
+            const transcript = item[0].transcript;
+            if (item.isFinal) {
+              currentSessionFinal += transcript + ' ';
+            } else {
+              interimTranscript += transcript;
+            }
           }
         }
 
-        if (finalChunk) {
-          accumulatedTextRef.current += finalChunk;
-          onTranscriptUpdate(accumulatedTextRef.current.trim(), true);
-        } else if (interimTranscript) {
-          const preview = (accumulatedTextRef.current + ' ' + interimTranscript).trim();
-          onTranscriptUpdate(preview, false);
+        if (currentSessionFinal) {
+          fullTranscriptRef.current = (fullTranscriptRef.current + ' ' + currentSessionFinal).trim();
+        }
+
+        const combined = (fullTranscriptRef.current + ' ' + interimTranscript).trim();
+        if (combined) {
+          onTranscriptUpdate(combined, Boolean(currentSessionFinal));
         }
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         if (event.error === 'no-speech') {
-          // Normal timeout if user was silent for a second, ignore
           return;
         }
         if (event.error === 'not-allowed') {
           setError('Microphone access denied. Please allow microphone permissions.');
         } else {
-          setError(`Speech recognition notice: ${event.error}`);
+          console.warn('Speech recognition notice:', event.error);
         }
       };
 
@@ -125,7 +128,7 @@ export function useWebSpeech({
   }, []);
 
   const resetTranscript = useCallback(() => {
-    accumulatedTextRef.current = '';
+    fullTranscriptRef.current = '';
   }, []);
 
   useEffect(() => {

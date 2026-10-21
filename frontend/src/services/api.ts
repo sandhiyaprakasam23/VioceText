@@ -23,9 +23,24 @@ export function getOrCreateSessionId(): string {
   return sessionId;
 }
 
+export function getStoredGeminiKey(): string {
+  return localStorage.getItem('voicetext_gemini_api_key') || '';
+}
+
+export function setStoredGeminiKey(key: string): void {
+  const clean = key.trim();
+  if (clean) {
+    localStorage.setItem('voicetext_gemini_api_key', clean);
+  } else {
+    localStorage.removeItem('voicetext_gemini_api_key');
+  }
+}
+
 function getHeaders(customHeaders: Record<string, string> = {}): HeadersInit {
+  const geminiKey = getStoredGeminiKey();
   return {
     'X-Session-ID': getOrCreateSessionId(),
+    ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
     ...customHeaders,
   };
 }
@@ -130,6 +145,38 @@ export async function uploadAudio(id: string, audioBlob: Blob): Promise<Transcri
   return res.json();
 }
 
+export async function transcribeAudioFile(
+  audioBlob: Blob,
+  language = 'ta-IN',
+  overrideKey?: string
+): Promise<{ text: string; word_count: number; gemini_active?: boolean }> {
+  const formData = new FormData();
+  const extension = audioBlob.type.includes('mp4')
+    ? 'm4a'
+    : audioBlob.type.includes('wav')
+    ? 'wav'
+    : audioBlob.type.includes('mp3')
+    ? 'mp3'
+    : 'webm';
+  formData.append('audio_file', audioBlob, `recording_sample.${extension}`);
+  formData.append('language', language);
+  const geminiKey = overrideKey || getStoredGeminiKey();
+  if (geminiKey) {
+    formData.append('api_key', geminiKey);
+  }
+
+  const res = await fetch(`${API_BASE_URL}/api/transcriptions/transcribe_audio/`, {
+    method: 'POST',
+    headers: {
+      'X-Session-ID': getOrCreateSessionId(),
+      ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
+    },
+    body: formData,
+  });
+  if (!res.ok) throw new Error('Audio transcription failed');
+  return res.json();
+}
+
 export async function toggleShare(id: string, isPublic?: boolean): Promise<{ is_public: boolean; share_token: string; share_path: string }> {
   const res = await fetch(`${API_BASE_URL}/api/transcriptions/${id}/share/`, {
     method: 'POST',
@@ -149,10 +196,11 @@ export async function fetchPublicTranscription(token: string): Promise<Transcrip
 }
 
 export async function analyzeTranscription(id: string, targetLanguage = 'en'): Promise<Transcription> {
+  const geminiKey = getStoredGeminiKey();
   const res = await fetch(`${API_BASE_URL}/api/transcriptions/${id}/analyze/`, {
     method: 'POST',
     headers: getHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ target_language: targetLanguage }),
+    body: JSON.stringify({ target_language: targetLanguage, api_key: geminiKey }),
   });
   if (!res.ok) throw new Error(`Failed to analyze transcription: ${res.statusText}`);
   return res.json();

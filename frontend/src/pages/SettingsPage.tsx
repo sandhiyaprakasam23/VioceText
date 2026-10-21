@@ -13,9 +13,18 @@ import {
   Download,
   Check,
   Shield,
+  Sparkles,
+  ExternalLink,
 } from 'lucide-react';
 import { UserSettings, SUPPORTED_LANGUAGES, EngineType } from '../types';
-import { fetchSettings, updateSettings, fetchTranscriptions, bulkDeleteTranscriptions } from '../services/api';
+import {
+  fetchSettings,
+  updateSettings,
+  fetchTranscriptions,
+  bulkDeleteTranscriptions,
+  getStoredGeminiKey,
+  setStoredGeminiKey,
+} from '../services/api';
 
 interface SettingsPageProps {
   currentSettings: UserSettings;
@@ -29,6 +38,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [settings, setSettings] = useState<UserSettings>(currentSettings);
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [geminiKey, setGeminiKey] = useState(getStoredGeminiKey());
 
   useEffect(() => {
     setSettings(currentSettings);
@@ -131,7 +141,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
               <span>Speech Recognition Engine</span>
             </div>
             <p className="text-xs text-cyber-muted">
-              Gemini Live API (multilingual backend proxy) or Browser Web Speech API
+              Browser Web Speech API (Free / Instant) or Gemini Live API (Google Cloud AI)
             </p>
           </div>
           <select
@@ -139,9 +149,46 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
             onChange={(e) => handleChange('default_engine', e.target.value as EngineType)}
             className="bg-black/50 border border-cyber-primary/30 rounded-xl px-3 py-1.5 text-xs text-cyber-accent font-mono focus:outline-none focus:border-cyber-primary"
           >
-            <option value="gemini-live">Gemini Live API (Default)</option>
-            <option value="browser-webspeech">Browser Web Speech API</option>
+            <option value="browser-webspeech">Browser Web Speech API (Free / Default)</option>
+            <option value="gemini-live">Gemini Live API (Google Cloud AI)</option>
           </select>
+        </div>
+
+        {/* Gemini API Key */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-cyber-primary/15">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2 text-sm font-medium text-cyber-text">
+              <Sparkles className="w-4 h-4 text-cyber-accent" />
+              <span>Google Gemini API Key (Optional)</span>
+            </div>
+            <p className="text-xs text-cyber-muted">
+              Enables Gemini multimodal audio file transcription, live streaming, & AI summaries
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="password"
+              placeholder="AIzaSy... (optional)"
+              value={geminiKey}
+              onChange={(e) => {
+                const val = e.target.value;
+                setGeminiKey(val);
+                setStoredGeminiKey(val);
+                setSavedSuccess(true);
+                setTimeout(() => setSavedSuccess(false), 1500);
+              }}
+              className="bg-black/50 border border-cyber-primary/30 rounded-xl px-3 py-1.5 text-xs text-cyber-primary font-mono focus:outline-none focus:border-cyber-accent w-48"
+            />
+            <a
+              href="https://aistudio.google.com/app/apikey"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-cyber-accent underline shrink-0 hover:text-white"
+              title="Get free key from Google AI Studio"
+            >
+              Get Free Key
+            </a>
+          </div>
         </div>
 
         {/* Auto-Save Toggle */}

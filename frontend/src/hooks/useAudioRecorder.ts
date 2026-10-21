@@ -55,17 +55,16 @@ export function useAudioRecorder({
       // 1. Get user media microphone stream
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          channelCount: 1,
-          sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
         },
       });
       mediaStreamRef.current = stream;
 
       // 2. Setup Web Audio API Analyser for live waveform
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioContextClass({ sampleRate: 16000 });
+      const audioCtx = new AudioContextClass();
       audioContextRef.current = audioCtx;
 
       const sourceNode = audioCtx.createMediaStreamSource(stream);
@@ -80,21 +79,30 @@ export function useAudioRecorder({
       const scriptProcessor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
       scriptProcessorRef.current = scriptProcessor;
 
+      // Downsample to 16kHz linear PCM
+      const targetRate = 16000;
+      const sampleStep = Math.max(1, Math.round(audioCtx.sampleRate / targetRate));
+
       scriptProcessor.onaudioprocess = (e) => {
         if (recordingState === 'paused') return;
         const inputData = e.inputBuffer.getChannelData(0);
-        // Convert Float32Array to 16-bit linear PCM
-        const pcm16 = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
+        const outputLength = Math.floor(inputData.length / sampleStep);
+        const pcm16 = new Int16Array(outputLength);
+        for (let i = 0, j = 0; i < inputData.length && j < outputLength; i += sampleStep, j++) {
           const s = Math.max(-1, Math.min(1, inputData[i]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          pcm16[j] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
         if (onAudioChunk) {
           onAudioChunk(new Uint8Array(pcm16.buffer));
         }
       };
+
+      // Connect through a zero-gain node to satisfy Chrome WebAudio pipeline without feedback
+      const muteGain = audioCtx.createGain();
+      muteGain.gain.value = 0;
       sourceNode.connect(scriptProcessor);
-      scriptProcessor.connect(audioCtx.destination);
+      scriptProcessor.connect(muteGain);
+      muteGain.connect(audioCtx.destination);
 
       // 4. Setup MediaRecorder for final audio recording capture
       let mimeType = 'audio/webm;codecs=opus';

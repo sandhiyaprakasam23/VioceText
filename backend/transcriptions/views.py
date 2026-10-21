@@ -1,4 +1,5 @@
 import uuid
+from django.conf import settings
 from django.db.models import Q, Count, Sum
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, status
@@ -98,9 +99,45 @@ class TranscriptionViewSet(viewsets.ModelViewSet):
             return Response({"error": "No 'audio_file' uploaded"}, status=status.HTTP_400_BAD_REQUEST)
 
         instance.audio_file = audio_file
-        instance.save(update_fields=["audio_file"])
+        
+        # If transcript text is empty, auto-transcribe from audio file using Gemini!
+        if not instance.text:
+            try:
+                audio_file.seek(0)
+                from .ai_assistant import transcribe_audio_bytes
+                mime = getattr(audio_file, 'content_type', 'audio/webm')
+                api_key = request.headers.get("X-Gemini-Key") or getattr(settings, "GEMINI_API_KEY", "")
+                text = transcribe_audio_bytes(audio_file.read(), mime, instance.language, api_key=api_key)
+                if text:
+                    instance.text = text
+                    instance.word_count = len(text.strip().split())
+            except Exception as e:
+                pass
+
+        instance.save()
         serializer = self.get_serializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
+    def transcribe_audio(self, request):
+        audio_file = request.FILES.get("audio_file")
+        if not audio_file:
+            return Response({"error": "No 'audio_file' uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+
+        language = request.data.get("language", "ta-IN")
+        api_key = request.headers.get("X-Gemini-Key") or request.data.get("api_key") or getattr(settings, "GEMINI_API_KEY", "")
+        audio_bytes = audio_file.read()
+        mime_type = getattr(audio_file, "content_type", "audio/webm")
+
+        from .ai_assistant import transcribe_audio_bytes
+        text = transcribe_audio_bytes(audio_bytes, mime_type, language, api_key=api_key)
+
+        return Response({
+            "text": text,
+            "word_count": len(text.strip().split()) if text else 0,
+            "language": language,
+            "gemini_active": bool(api_key),
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def share(self, request, pk=None):
@@ -144,7 +181,8 @@ class TranscriptionViewSet(viewsets.ModelViewSet):
     def analyze(self, request, pk=None):
         instance = self.get_object()
         target_lang = request.data.get("target_language", "en")
-        analysis = generate_ai_analysis(instance.text, target_lang)
+        api_key = request.headers.get("X-Gemini-Key") or request.data.get("api_key") or getattr(settings, "GEMINI_API_KEY", "")
+        analysis = generate_ai_analysis(instance.text, target_lang, api_key=api_key)
 
         if not instance.title or instance.title == "Untitled Recording":
             instance.title = analysis.get("title", instance.title)

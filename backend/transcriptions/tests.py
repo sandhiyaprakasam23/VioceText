@@ -144,3 +144,16 @@ class TranscriptionAPITestCase(TestCase):
         self.assertEqual(response.data["total_sessions"], 2)
         self.assertGreater(response.data["total_words"], 0)
         self.assertGreater(response.data["total_minutes"], 0)
+
+    def test_transcribe_audio_endpoint(self):
+        """Test transcribe_audio endpoint with mock audio file."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        fake_audio = SimpleUploadedFile("test.webm", b"RIFFfakeaudiocontent", content_type="audio/webm")
+        response = self.client.post(
+            "/api/transcriptions/transcribe_audio/",
+            {"audio_file": fake_audio, "language": "ta-IN"},
+            format="multipart"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("text", response.data)
+        self.assertEqual(response.data["language"], "ta-IN")

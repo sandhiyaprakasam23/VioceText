@@ -53,7 +53,7 @@ class Transcription(models.Model):
 class UserSettings(models.Model):
     device_session_id = models.CharField(max_length=128, unique=True, db_index=True)
     default_language = models.CharField(max_length=50, default="en-IN")
-    default_engine = models.CharField(max_length=50, default="gemini-live")
+    default_engine = models.CharField(max_length=50, default="browser-webspeech")
     auto_save = models.BooleanField(default=True)
     save_audio = models.BooleanField(default=True)
     auto_copy_on_stop = models.BooleanField(default=False)

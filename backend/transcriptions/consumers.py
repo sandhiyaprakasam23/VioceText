@@ -20,6 +20,7 @@ class LiveTranscriptionConsumer(AsyncWebsocketConsumer):
         query_string = self.scope.get("query_string", b"").decode("utf-8")
         params = dict(qc.split("=") for qc in query_string.split("&") if "=" in qc)
         self.client_language = params.get("language", "en-IN")
+        self.client_gemini_key = params.get("gemini_key", "")
 
         await self.send(text_data=json.dumps({
             "type": "connection_established",
@@ -38,6 +39,8 @@ class LiveTranscriptionConsumer(AsyncWebsocketConsumer):
 
                 if action == "start":
                     self.client_language = data.get("language", self.client_language)
+                    if data.get("gemini_key"):
+                        self.client_gemini_key = data.get("gemini_key")
                     engine = data.get("engine", "gemini-live")
                     if engine == "gemini-live":
                         await self._start_gemini_session()
@@ -77,11 +80,11 @@ class LiveTranscriptionConsumer(AsyncWebsocketConsumer):
                 await self._forward_audio_to_gemini(bytes_data)
 
     async def _start_gemini_session(self):
-        gemini_key = getattr(settings, "GEMINI_API_KEY", "")
+        gemini_key = getattr(self, "client_gemini_key", "") or getattr(settings, "GEMINI_API_KEY", "")
         if not gemini_key:
             await self.send(text_data=json.dumps({
                 "type": "fallback_notice",
-                "message": "GEMINI_API_KEY not configured on server. Falling back to Browser Web Speech API.",
+                "message": "Gemini API key is not configured. Falling back to Browser Web Speech API.",
                 "fallback": True
             }))
             return

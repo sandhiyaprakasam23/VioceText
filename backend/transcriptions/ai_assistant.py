@@ -5,7 +5,46 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
-def generate_ai_analysis(transcript_text, target_language="en"):
+def transcribe_audio_bytes(audio_bytes, mime_type="audio/webm", language="ta-IN", api_key=None):
+    """
+    Directly converts audio recording bytes into text using Gemini multimodal model.
+    Accurately supports Tamil + English, Hindi + English, etc.
+    """
+    gemini_key = api_key or getattr(settings, 'GEMINI_API_KEY', '')
+    if not gemini_key:
+        return ""
+    if not audio_bytes:
+        return ""
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=gemini_key)
+        model_name = getattr(settings, 'GEMINI_TEXT_MODEL', 'gemini-1.5-flash')
+
+        clean_mime = mime_type.split(';')[0] if mime_type else "audio/webm"
+        prompt = (
+            "Transcribe this audio recording exactly verbatim as spoken. "
+            "Keep each language in its native script: write Tamil in Tamil script (தமிழ்), "
+            "Hindi in Devanagari script (हिन्दी), and English in Latin script. "
+            "Output ONLY the verbatim transcription without preamble, quotes, or explanations."
+        )
+
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[
+                types.Part.from_bytes(data=audio_bytes, mime_type=clean_mime),
+                prompt
+            ]
+        )
+        return response.text.strip() if response.text else ""
+    except Exception as e:
+        logger.warning(f"Gemini audio transcription failed: {e}")
+        return ""
+
+
+def generate_ai_analysis(transcript_text, target_language="en", api_key=None):
     """
     Calls Gemini model to generate:
     - title
@@ -24,7 +63,7 @@ def generate_ai_analysis(transcript_text, target_language="en"):
             "translation": {},
         }
 
-    gemini_key = getattr(settings, 'GEMINI_API_KEY', '')
+    gemini_key = api_key or getattr(settings, 'GEMINI_API_KEY', '')
     if not gemini_key:
         return _fallback_analysis(transcript_text)
 
