@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: voicetext
+      POSTGRES_USER: voicetext_user
+      POSTGRES_PASSWORD: voicetext_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    command: daphne -b 0.0.0.0 -p 8000 voicetext.asgi:application
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=docker-local-dev-secret-key-12345
+      - ALLOWED_HOSTS=*
+      - DATABASE_URL=postgres://voicetext_user:voicetext_password@db:5432/voicetext
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_LIVE_MODEL=gemini-2.0-flash-exp
+      - GEMINI_TEXT_MODEL=gemini-1.5-flash
+    volumes:
+      - ./backend/media:/app/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
