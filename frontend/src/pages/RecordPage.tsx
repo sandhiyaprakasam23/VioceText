@@ -266,6 +266,10 @@ export const RecordPage: React.FC<RecordPageProps> = ({
       showToast('No audio recording found to convert!');
       return;
     }
+    if (liveTranscript.trim()) {
+      showToast('✓ Speech already converted live in the transcript above!');
+      return;
+    }
     const storedKey = getStoredGeminiKey();
     if (!storedKey) {
       setGeminiModalOpen(true);
@@ -510,39 +514,15 @@ export const RecordPage: React.FC<RecordPageProps> = ({
           </div>
         </div>
 
-        {/* Engine Switcher & Status */}
+        {/* Engine Status Badge */}
         <div className="flex flex-col items-center gap-2 mb-5">
           <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono">
             <span className="text-cyber-muted">Engine:</span>
-            <button
-              onClick={() => setActiveEngine(activeEngine === 'gemini-live' ? 'browser-webspeech' : 'gemini-live')}
-              className="px-2.5 py-1 rounded-full bg-black/60 border border-cyber-primary/30 text-cyber-primary hover:border-cyber-primary transition-colors flex items-center gap-1 cursor-pointer"
-              title="Click to toggle speech engine"
-            >
-              <Cpu className="w-3 h-3" />
-              <span>{activeEngine === 'gemini-live' ? '⚡ Gemini Live API' : '🌐 Browser Web Speech'}</span>
-              <span className="text-[9px] text-cyber-muted">(Switch)</span>
-            </button>
-
-            <button
-              onClick={() => setGeminiModalOpen(true)}
-              className={`px-2.5 py-1 rounded-full border text-[11px] font-mono flex items-center gap-1 transition-colors ${
-                getStoredGeminiKey()
-                  ? 'bg-cyan-950/60 border-cyber-accent text-cyber-accent hover:bg-cyan-900'
-                  : 'bg-black/60 border-cyber-primary/30 text-cyber-muted hover:text-cyber-primary'
-              }`}
-              title="Configure Google Gemini API Key for AI features"
-            >
-              <Key className="w-3 h-3 text-cyber-accent" />
-              <span>{getStoredGeminiKey() ? '✓ Gemini Key' : '+ Gemini Key'}</span>
-            </button>
-          </div>
-          {engineFallbackNotice && (
-            <div className="flex items-center gap-1.5 text-[11px] font-mono text-amber-300 bg-amber-950/40 border border-amber-500/30 px-3 py-1 rounded-xl">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-              <span>{engineFallbackNotice}</span>
+            <div className="px-3 py-1 rounded-full bg-cyan-950/40 border border-cyber-accent/40 text-cyber-accent flex items-center gap-1.5 shadow-cyan-glow-sm">
+              <Globe className="w-3.5 h-3.5 text-cyber-accent" />
+              <span>Browser Web Speech (100% Free • No API Key Needed)</span>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Glowing Symmetrical Waveform Frame */}

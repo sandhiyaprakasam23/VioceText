@@ -14,7 +14,7 @@ export function App() {
   const [settings, setSettings] = useState<UserSettings>({
     device_session_id: getOrCreateSessionId(),
     default_language: 'en-IN',
-    default_engine: 'gemini-live',
+    default_engine: 'browser-webspeech',
     auto_save: true,
     save_audio: true,
     auto_copy_on_stop: false,
