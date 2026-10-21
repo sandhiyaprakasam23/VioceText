@@ -3,13 +3,13 @@ import { Transcription, UserSettings, Stats } from '../types';
 export const API_BASE_URL = import.meta.env.VITE_API_URL || (
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? 'http://localhost:8000'
-    : ''
+    : 'https://viocetext.onrender.com'
 );
 
 export const WS_BASE_URL = import.meta.env.VITE_WS_URL || (
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? 'ws://localhost:8000/ws/transcribe/'
-    : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/transcribe/`
+    : 'wss://viocetext.onrender.com/ws/transcribe/'
 );
 
 // Anonymous per-device session isolation UUID
