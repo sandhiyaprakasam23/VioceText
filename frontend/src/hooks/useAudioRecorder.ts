@@ -74,35 +74,34 @@ export function useAudioRecorder({
       analyserRef.current = analyser;
       sourceNode.connect(analyser);
 
-      // 3. Audio chunk extraction for live WebSocket PCM stream (16kHz, 16-bit mono)
-      const bufferSize = 2048;
-      const scriptProcessor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
-      scriptProcessorRef.current = scriptProcessor;
+      // 3. Audio chunk extraction for live WebSocket PCM stream (only if onAudioChunk passed)
+      if (onAudioChunk) {
+        const bufferSize = 2048;
+        const scriptProcessor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+        scriptProcessorRef.current = scriptProcessor;
 
-      // Downsample to 16kHz linear PCM
-      const targetRate = 16000;
-      const sampleStep = Math.max(1, Math.round(audioCtx.sampleRate / targetRate));
+        const targetRate = 16000;
+        const sampleStep = Math.max(1, Math.round(audioCtx.sampleRate / targetRate));
 
-      scriptProcessor.onaudioprocess = (e) => {
-        if (recordingState === 'paused') return;
-        const inputData = e.inputBuffer.getChannelData(0);
-        const outputLength = Math.floor(inputData.length / sampleStep);
-        const pcm16 = new Int16Array(outputLength);
-        for (let i = 0, j = 0; i < inputData.length && j < outputLength; i += sampleStep, j++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          pcm16[j] = s < 0 ? s * 0x8000 : s * 0x7fff;
-        }
-        if (onAudioChunk) {
+        scriptProcessor.onaudioprocess = (e) => {
+          if (recordingState === 'paused') return;
+          const inputData = e.inputBuffer.getChannelData(0);
+          const outputLength = Math.floor(inputData.length / sampleStep);
+          const pcm16 = new Int16Array(outputLength);
+          for (let i = 0, j = 0; i < inputData.length && j < outputLength; i += sampleStep, j++) {
+            const s = Math.max(-1, Math.min(1, inputData[i]));
+            pcm16[j] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          }
           onAudioChunk(new Uint8Array(pcm16.buffer));
-        }
-      };
+        };
 
-      // Connect through a zero-gain node to satisfy Chrome WebAudio pipeline without feedback
-      const muteGain = audioCtx.createGain();
-      muteGain.gain.value = 0;
-      sourceNode.connect(scriptProcessor);
-      scriptProcessor.connect(muteGain);
-      muteGain.connect(audioCtx.destination);
+        // Connect through a zero-gain node to satisfy Chrome WebAudio pipeline without feedback
+        const muteGain = audioCtx.createGain();
+        muteGain.gain.value = 0;
+        sourceNode.connect(scriptProcessor);
+        scriptProcessor.connect(muteGain);
+        muteGain.connect(audioCtx.destination);
+      }
 
       // 4. Setup MediaRecorder for final audio recording capture
       let mimeType = 'audio/webm;codecs=opus';

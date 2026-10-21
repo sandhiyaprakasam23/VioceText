@@ -1,134 +1,205 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
-// Declare types for Web Speech API
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-  message?: string;
-}
-
-interface SpeechRecognitionEvent extends Event {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
 interface IWindow extends Window {
   SpeechRecognition?: any;
   webkitSpeechRecognition?: any;
 }
 
 export function useWebSpeech({
-  language = 'en-IN',
+  language = 'ta-IN',
   onTranscriptUpdate,
 }: {
   language: string;
-  onTranscriptUpdate: (text: string, isFinal: boolean) => void;
+  onTranscriptUpdate: (text: string) => void;
 }) {
   const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const recognitionRef = useRef<any>(null);
   const shouldListenRef = useRef(false);
-  const fullTranscriptRef = useRef('');
+  const sessionBaseTextRef = useRef(''); // Finalized text preserved across speech sessions
+  const currentSessionFinalRef = useRef(''); // Finalized text in current active recognition object
+  const currentLanguageRef = useRef(language);
 
-  // Check browser support
+  // Sync language ref whenever language changes
+  useEffect(() => {
+    currentLanguageRef.current = language;
+  }, [language]);
+
   const isSupported = typeof window !== 'undefined' && Boolean(
     (window as IWindow).SpeechRecognition || (window as IWindow).webkitSpeechRecognition
   );
 
-  const startListening = useCallback((initialLanguage?: string) => {
+  const startListening = useCallback((langToUse?: string) => {
     if (!isSupported) {
-      setError('Web Speech API is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      setError('Web Speech recognition is not supported in this browser. Please use Google Chrome, Edge, or Safari.');
       return false;
     }
 
-    try {
-      const SpeechRecognitionClass = (window as IWindow).SpeechRecognition || (window as IWindow).webkitSpeechRecognition;
-      const recognition = new SpeechRecognitionClass();
-      
-      const targetLang = initialLanguage || language;
-      recognition.lang = targetLang === 'multilingual' ? 'ta-IN' : targetLang;
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 1;
+    // Terminate any previous instance cleanly
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.abort();
+      } catch {}
+      recognitionRef.current = null;
+    }
 
-      recognition.onstart = () => {
-        setIsListening(true);
-        setError(null);
-        shouldListenRef.current = true;
-      };
+    shouldListenRef.current = true;
+    setError(null);
 
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
-        let interimTranscript = '';
-        let currentSessionFinal = '';
+    const targetLang = langToUse || currentLanguageRef.current || 'ta-IN';
+    const cleanLang = targetLang === 'multilingual' ? 'ta-IN' : targetLang;
 
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const item = event.results[i];
-          if (item && item[0]) {
-            const transcript = item[0].transcript;
-            if (item.isFinal) {
-              currentSessionFinal += transcript + ' ';
-            } else {
-              interimTranscript += transcript;
+    const createAndStart = () => {
+      if (!shouldListenRef.current) return;
+
+      try {
+        const SpeechRecognitionClass = (window as IWindow).SpeechRecognition || (window as IWindow).webkitSpeechRecognition;
+        const recognition = new SpeechRecognitionClass();
+
+        recognition.lang = cleanLang;
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => {
+          setIsListening(true);
+          setError(null);
+        };
+
+        recognition.onspeechstart = () => {
+          setIsSpeaking(true);
+        };
+
+        recognition.onspeechend = () => {
+          setIsSpeaking(false);
+        };
+
+        recognition.onsoundstart = () => {
+          setIsSpeaking(true);
+        };
+
+        recognition.onsoundend = () => {
+          setIsSpeaking(false);
+        };
+
+        recognition.onresult = (event: any) => {
+          let interimText = '';
+          let finalText = '';
+
+          for (let i = 0; i < event.results.length; ++i) {
+            const res = event.results[i];
+            if (res && res[0]) {
+              const text = res[0].transcript || '';
+              if (res.isFinal) {
+                finalText += text + ' ';
+              } else {
+                interimText += text;
+              }
             }
           }
-        }
 
-        if (currentSessionFinal) {
-          fullTranscriptRef.current = (fullTranscriptRef.current + ' ' + currentSessionFinal).trim();
-        }
+          currentSessionFinalRef.current = finalText;
 
-        const combined = (fullTranscriptRef.current + ' ' + interimTranscript).trim();
-        if (combined) {
-          onTranscriptUpdate(combined, Boolean(currentSessionFinal));
-        }
-      };
+          const fullCombined = [
+            sessionBaseTextRef.current,
+            finalText,
+            interimText
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim();
 
-      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        if (event.error === 'no-speech') {
-          return;
-        }
-        if (event.error === 'not-allowed') {
-          setError('Microphone access denied. Please allow microphone permissions.');
-        } else {
-          console.warn('Speech recognition notice:', event.error);
-        }
-      };
+          if (fullCombined) {
+            onTranscriptUpdate(fullCombined);
+          }
+        };
 
-      recognition.onend = () => {
-        // Auto-restart if user did not click Stop
-        if (shouldListenRef.current) {
-          try {
-            recognition.start();
-          } catch {
+        recognition.onerror = (event: any) => {
+          console.warn('[WebSpeech] notice/error:', event.error);
+          if (event.error === 'no-speech') {
+            // User paused speech, keep listening seamlessly
+            return;
+          }
+          if (event.error === 'not-allowed') {
+            setError('Microphone permission denied. Please allow microphone access in your browser address bar.');
+            shouldListenRef.current = false;
+            setIsListening(false);
+            return;
+          }
+          if (event.error === 'audio-capture') {
+            setError('Microphone audio capture busy. Please close other recording tabs or wait a second.');
+          }
+        };
+
+        recognition.onend = () => {
+          setIsSpeaking(false);
+          // If user didn't click stop, accumulate finalized text and start a fresh instance
+          if (shouldListenRef.current) {
+            if (currentSessionFinalRef.current) {
+              sessionBaseTextRef.current = [sessionBaseTextRef.current, currentSessionFinalRef.current]
+                .filter(Boolean)
+                .join(' ')
+                .trim();
+              currentSessionFinalRef.current = '';
+            }
+            // 80ms breather before starting fresh instance to avoid browser rate limit
+            setTimeout(() => {
+              if (shouldListenRef.current) {
+                createAndStart();
+              }
+            }, 80);
+          } else {
             setIsListening(false);
           }
-        } else {
-          setIsListening(false);
-        }
-      };
+        };
 
-      recognitionRef.current = recognition;
-      recognition.start();
-      return true;
-    } catch (err: any) {
-      setError(err?.message || 'Failed to start Web Speech recognition');
-      setIsListening(false);
-      return false;
-    }
-  }, [isSupported, language, onTranscriptUpdate]);
+        recognitionRef.current = recognition;
+        recognition.start();
+        return true;
+      } catch (err: any) {
+        console.error('[WebSpeech] createAndStart exception:', err);
+        setError(err?.message || 'Failed to start speech recognition');
+        setIsListening(false);
+        return false;
+      }
+    };
+
+    return createAndStart();
+  }, [isSupported, onTranscriptUpdate]);
 
   const stopListening = useCallback(() => {
     shouldListenRef.current = false;
+    setIsListening(false);
+    setIsSpeaking(false);
+
     if (recognitionRef.current) {
       try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onresult = null;
         recognitionRef.current.stop();
       } catch {}
       recognitionRef.current = null;
     }
-    setIsListening(false);
+
+    if (currentSessionFinalRef.current) {
+      sessionBaseTextRef.current = [sessionBaseTextRef.current, currentSessionFinalRef.current]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      currentSessionFinalRef.current = '';
+    }
   }, []);
 
   const resetTranscript = useCallback(() => {
-    fullTranscriptRef.current = '';
+    sessionBaseTextRef.current = '';
+    currentSessionFinalRef.current = '';
   }, []);
 
   useEffect(() => {
@@ -136,7 +207,10 @@ export function useWebSpeech({
       shouldListenRef.current = false;
       if (recognitionRef.current) {
         try {
-          recognitionRef.current.stop();
+          recognitionRef.current.onend = null;
+          recognitionRef.current.onerror = null;
+          recognitionRef.current.onresult = null;
+          recognitionRef.current.abort();
         } catch {}
       }
     };
@@ -145,6 +219,7 @@ export function useWebSpeech({
   return {
     isSupported,
     isListening,
+    isSpeaking,
     error,
     startListening,
     stopListening,

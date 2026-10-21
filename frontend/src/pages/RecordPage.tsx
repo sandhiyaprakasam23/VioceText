@@ -53,7 +53,9 @@ export const RecordPage: React.FC<RecordPageProps> = ({
   settings,
   onNavigateToHistory,
 }) => {
-  const [selectedLanguage, setSelectedLanguage] = useState(settings.default_language || 'en-IN');
+  const [selectedLanguage, setSelectedLanguage] = useState(
+    settings.default_language && settings.default_language !== 'en-IN' ? settings.default_language : 'ta-IN'
+  );
   const [activeEngine, setActiveEngine] = useState<EngineType>(settings.default_engine || 'browser-webspeech');
   const [engineFallbackNotice, setEngineFallbackNotice] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState('');
@@ -82,11 +84,11 @@ export const RecordPage: React.FC<RecordPageProps> = ({
 
   // Sync with user settings
   useEffect(() => {
-    setSelectedLanguage(settings.default_language);
-    setActiveEngine(settings.default_engine);
+    if (settings.default_language) setSelectedLanguage(settings.default_language);
+    if (settings.default_engine) setActiveEngine(settings.default_engine);
   }, [settings]);
 
-  // Audio chunk callback to stream 16kHz PCM chunks over WebSocket to backend
+  // Audio chunk callback to stream 16kHz PCM chunks over WebSocket to backend (only for Gemini Live)
   const handlePcmChunk = useCallback((pcmBytes: Uint8Array) => {
     if (activeEngine === 'gemini-live' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(pcmBytes.buffer);
@@ -104,11 +106,14 @@ export const RecordPage: React.FC<RecordPageProps> = ({
     resumeRecording: resumeMic,
     stopRecording: stopMic,
   } = useAudioRecorder({
-    onAudioChunk: handlePcmChunk,
+    onAudioChunk: activeEngine === 'gemini-live' ? handlePcmChunk : undefined,
   });
 
-  // Web Speech Fallback / Alternative Hook
+  // Web Speech Hook for Live Speech-to-Text
   const {
+    isListening: isWebSpeechListening,
+    isSpeaking: isWebSpeechSpeaking,
+    error: webSpeechError,
     startListening: startWebSpeech,
     stopListening: stopWebSpeech,
     resetTranscript: resetWebSpeech,
@@ -178,14 +183,14 @@ export const RecordPage: React.FC<RecordPageProps> = ({
     setSessionTitle('');
     resetWebSpeech();
 
-    // 1. Always start Web Speech API for immediate live speech transcription
+    // 1. Immediately start Web Speech API for real-time speech transcription
     startWebSpeech(selectedLanguage);
 
-    // 2. Start microphone recording & waveform
-    const micStarted = await startMic();
-    if (!micStarted) {
-      stopWebSpeech();
-      return;
+    // 2. Start microphone recording & waveform (safe try/catch so speech recognition never fails)
+    try {
+      await startMic();
+    } catch (e) {
+      console.warn('Mic recorder stream notice:', e);
     }
 
     // 3. Connect to Gemini Live if selected
@@ -426,13 +431,21 @@ export const RecordPage: React.FC<RecordPageProps> = ({
   const currentLangObj = SUPPORTED_LANGUAGES.find((l) => l.code === selectedLanguage) || SUPPORTED_LANGUAGES[0];
 
   const quickLanguages = [
-    { code: 'multilingual', label: 'All / Code-Mixed', native: 'தமிழ் + Eng + हिन्दी' },
     { code: 'ta-IN', label: 'Tamil', native: 'தமிழ்' },
+    { code: 'multilingual', label: 'All / Mixed', native: 'தமிழ் + Eng' },
     { code: 'en-IN', label: 'English', native: 'English' },
     { code: 'hi-IN', label: 'Hindi', native: 'हिन्दी' },
     { code: 'te-IN', label: 'Telugu', native: 'తెలుగు' },
-    { code: 'ml-IN', label: 'Malayalam', native: 'മലയാളം' },
+    { code: 'ml-IN', label: 'Malayalam', native: 'മലയാളம்' },
   ];
+
+  const handleSelectLanguage = (code: string) => {
+    setSelectedLanguage(code);
+    if (recordingState === 'recording' || isWebSpeechListening) {
+      startWebSpeech(code);
+      showToast(`Language switched to ${code}`);
+    }
+  };
 
   const filteredLanguages = SUPPORTED_LANGUAGES.filter(
     (l) =>
@@ -467,7 +480,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({
             {quickLanguages.map((l) => (
               <button
                 key={l.code}
-                onClick={() => setSelectedLanguage(l.code)}
+                onClick={() => handleSelectLanguage(l.code)}
                 className={`px-3 py-1 rounded-full text-xs font-mono transition-all flex items-center gap-1.5 ${
                   selectedLanguage === l.code
                     ? 'bg-cyber-primary text-black font-bold shadow-cyan-glow-sm'
@@ -621,9 +634,27 @@ export const RecordPage: React.FC<RecordPageProps> = ({
       <div className="w-full max-w-xl bg-cyber-card/85 border border-cyber-primary/25 rounded-28 p-5 backdrop-blur-md shadow-sm space-y-4">
         {/* Box Header */}
         <div className="flex items-center justify-between pb-2 border-b border-cyber-primary/15">
-          <div className="flex items-center gap-2 text-xs font-mono text-cyber-muted">
-            <span className={`w-2 h-2 rounded-full ${recordingState === 'recording' ? 'bg-cyber-primary animate-ping' : 'bg-gray-500'}`} />
-            <span>Live Transcript Stream</span>
+          <div className="flex items-center gap-2 text-xs font-mono">
+            <span
+              className={`w-2.5 h-2.5 rounded-full ${
+                recordingState === 'recording' || isWebSpeechListening
+                  ? 'bg-red-500 animate-ping'
+                  : 'bg-gray-500'
+              }`}
+            />
+            <span
+              className={
+                recordingState === 'recording' || isWebSpeechListening
+                  ? 'text-cyber-primary font-bold animate-pulse'
+                  : 'text-cyber-muted'
+              }
+            >
+              {recordingState === 'recording' || isWebSpeechListening
+                ? isWebSpeechSpeaking
+                  ? '🎙️ Speaking detected... transcribing live!'
+                  : `🎙️ Microphone listening in ${currentLangObj.native} (${currentLangObj.label})... Speak now!`
+                : 'Live Transcript Stream'}
+            </span>
           </div>
 
           {/* Direct Top Controls: Listen (TTS) & Word Count */}
@@ -639,6 +670,24 @@ export const RecordPage: React.FC<RecordPageProps> = ({
           </div>
         </div>
 
+        {/* Live speech feedback banner when recording */}
+        {(recordingState === 'recording' || isWebSpeechListening) && !liveTranscript && (
+          <div className="p-3 rounded-xl bg-cyan-950/40 border border-cyber-primary/40 flex items-center gap-2.5 text-xs text-cyber-primary font-mono animate-pulse">
+            <Sparkles className="w-4 h-4 text-cyber-accent shrink-0 animate-spin" />
+            <span>
+              மைக் ஆன் செய்யப்பட்டுள்ளது! <strong className="text-white">{currentLangObj.native}</strong> மொழியில் பேச ஆரம்பியுங்கள் — உங்கள் வார்த்தைகள் கீழே உடனே தோன்றும்!
+            </span>
+          </div>
+        )}
+
+        {/* Web Speech Error Notice if any */}
+        {webSpeechError && (
+          <div className="p-3 rounded-xl bg-red-950/40 border border-red-500/40 text-xs font-mono text-red-300 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+            <span>{webSpeechError}</span>
+          </div>
+        )}
+
         {/* Editable Transcript Area */}
         <textarea
           value={liveTranscript}
@@ -646,8 +695,8 @@ export const RecordPage: React.FC<RecordPageProps> = ({
             setIsEditingTranscript(true);
             setLiveTranscript(e.target.value);
           }}
-          placeholder="Speak into your mic... Words in Tamil, English, Hindi, and other languages appear here live as you talk. You can also edit this text anytime."
-          rows={6}
+          placeholder="மைக் ஆன் ஆனதும் பேச ஆரம்பியுங்கள்... நீங்கள் பேசும் தமிழ் (தமிழ் எழுத்துகளில்), English அல்லது Hindi வார்த்தைகள் இங்கே உடனுக்குடன் லைவ் டெக்ஸ்டாக வரும்!&#10;&#10;(Start speaking... Words in Tamil, English, or Hindi will appear here live in real-time!)"
+          rows={7}
           className="w-full bg-black/40 border border-cyber-primary/20 rounded-2xl p-4 font-mono text-xs md:text-sm text-cyber-text leading-relaxed placeholder:text-cyber-muted/50 focus:outline-none focus:border-cyber-primary resize-y"
         />
         <div ref={transcriptEndRef} />
