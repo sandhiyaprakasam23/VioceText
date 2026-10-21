@@ -21,7 +21,7 @@ def transcribe_audio_bytes(audio_bytes, mime_type="audio/webm", language="ta-IN"
         from google.genai import types
 
         client = genai.Client(api_key=gemini_key)
-        model_name = getattr(settings, 'GEMINI_TEXT_MODEL', 'gemini-1.5-flash')
+        model_name = getattr(settings, 'GEMINI_TEXT_MODEL', 'gemini-3.5-flash')
 
         clean_mime = mime_type.split(';')[0] if mime_type else "audio/webm"
         if language and language.startswith('en'):

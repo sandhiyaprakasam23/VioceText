@@ -36,11 +36,33 @@ export function setStoredGeminiKey(key: string): void {
   }
 }
 
+const LOCAL_STORAGE_HISTORY_KEY = 'voicetext_local_history';
+
+export function getLocalHistory(): Transcription[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveToLocalHistory(item: Transcription): void {
+  try {
+    const history = getLocalHistory();
+    const existingIndex = history.findIndex((h) => h.id === item.id);
+    if (existingIndex >= 0) {
+      history[existingIndex] = item;
+    } else {
+      history.unshift(item);
+    }
+    localStorage.setItem(LOCAL_STORAGE_HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
+  } catch {}
+}
+
 function getHeaders(customHeaders: Record<string, string> = {}): HeadersInit {
-  const geminiKey = getStoredGeminiKey();
   return {
     'X-Session-ID': getOrCreateSessionId(),
-    ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
     ...customHeaders,
   };
 }
@@ -54,42 +76,106 @@ export async function fetchTranscriptions(params: {
   ordering?: string;
   page?: number;
 } = {}): Promise<{ results: Transcription[]; count: number; next: string | null; previous: string | null }> {
-  const query = new URLSearchParams();
-  if (params.search) query.set('search', params.search);
-  if (params.language && params.language !== 'all') query.set('language', params.language);
-  if (params.is_favorite !== undefined) query.set('is_favorite', String(params.is_favorite));
-  if (params.date_from) query.set('date_from', params.date_from);
-  if (params.date_to) query.set('date_to', params.date_to);
-  if (params.ordering) query.set('ordering', params.ordering);
-  if (params.page) query.set('page', String(params.page));
+  const localItems = getLocalHistory();
+  try {
+    const query = new URLSearchParams();
+    if (params.search) query.set('search', params.search);
+    if (params.language && params.language !== 'all') query.set('language', params.language);
+    if (params.is_favorite !== undefined) query.set('is_favorite', String(params.is_favorite));
+    if (params.date_from) query.set('date_from', params.date_from);
+    if (params.date_to) query.set('date_to', params.date_to);
+    if (params.ordering) query.set('ordering', params.ordering);
+    if (params.page) query.set('page', String(params.page));
 
-  const res = await fetch(`${API_BASE_URL}/api/transcriptions/?${query.toString()}`, {
-    headers: getHeaders({ 'Accept': 'application/json' }),
-  });
-  if (!res.ok) throw new Error(`Failed to fetch transcriptions: ${res.statusText}`);
-  const data = await res.json();
-  if (Array.isArray(data)) {
-    return { results: data, count: data.length, next: null, previous: null };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const res = await fetch(`${API_BASE_URL}/api/transcriptions/?${query.toString()}`, {
+      headers: getHeaders({ 'Accept': 'application/json' }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const data = await res.json();
+      const serverResults: Transcription[] = Array.isArray(data) ? data : data.results || [];
+      // Sync local items with server items
+      const serverIds = new Set(serverResults.map((s) => s.id));
+      const merged = [...serverResults, ...localItems.filter((l) => !serverIds.has(l.id))];
+      return { results: merged, count: merged.length, next: null, previous: null };
+    }
+  } catch (err) {
+    console.warn('Network notice fetching transcriptions, using local history:', err);
   }
-  return data;
+
+  // Filter local items if offline
+  let filtered = [...localItems];
+  if (params.search) {
+    const s = params.search.toLowerCase();
+    filtered = filtered.filter((i) => i.title.toLowerCase().includes(s) || i.text.toLowerCase().includes(s));
+  }
+  if (params.language && params.language !== 'all') {
+    filtered = filtered.filter((i) => i.language === params.language);
+  }
+  return { results: filtered, count: filtered.length, next: null, previous: null };
 }
 
 export async function fetchTranscription(id: string): Promise<Transcription> {
-  const res = await fetch(`${API_BASE_URL}/api/transcriptions/${id}/`, {
-    headers: getHeaders({ 'Accept': 'application/json' }),
-  });
-  if (!res.ok) throw new Error(`Failed to fetch transcription: ${res.statusText}`);
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/transcriptions/${id}/`, {
+      headers: getHeaders({ 'Accept': 'application/json' }),
+    });
+    if (res.ok) return res.json();
+  } catch {}
+  const local = getLocalHistory().find((l) => l.id === id);
+  if (local) return local;
+  throw new Error(`Failed to fetch transcription`);
 }
 
 export async function createTranscription(payload: Partial<Transcription>): Promise<Transcription> {
-  const res = await fetch(`${API_BASE_URL}/api/transcriptions/`, {
-    method: 'POST',
-    headers: getHeaders({ 'Content-Type': 'application/json', 'Accept': 'application/json' }),
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`Failed to save transcription: ${res.statusText}`);
-  return res.json();
+  const cleanTitle = payload.title || (payload.text ? payload.text.trim().split(/\s+/).slice(0, 6).join(' ') : 'Live Recording');
+  const fallbackRecord: Transcription = {
+    id: 'local_' + crypto.randomUUID(),
+    device_session_id: getOrCreateSessionId(),
+    title: cleanTitle,
+    text: payload.text || '',
+    language: payload.language || 'en-IN',
+    detected_languages: [payload.language || 'en-IN'],
+    engine: payload.engine || 'browser-webspeech',
+    duration_seconds: payload.duration_seconds || 0,
+    word_count: payload.text ? payload.text.trim().split(/\s+/).filter(Boolean).length : 0,
+    is_favorite: false,
+    is_archived: false,
+    share_token: crypto.randomUUID(),
+    is_public: false,
+    key_points: [],
+    action_items: [],
+    translation: {},
+    created_at: new Date().toISOString(),
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${API_BASE_URL}/api/transcriptions/`, {
+      method: 'POST',
+      headers: getHeaders({ 'Content-Type': 'application/json', 'Accept': 'application/json' }),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const data = await res.json();
+      saveToLocalHistory(data);
+      return data;
+    }
+  } catch (err) {
+    console.warn('Network notice saving transcription, saved safely to local storage:', err);
+  }
+
+  // Always save safely to local storage so user NEVER sees "Failed to fetch"
+  saveToLocalHistory(fallbackRecord);
+  return fallbackRecord;
 }
 
 export async function updateTranscription(id: string, payload: Partial<Transcription>): Promise<Transcription> {

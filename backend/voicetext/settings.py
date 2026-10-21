@@ -126,6 +126,7 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
     'x-session-id',  # Custom header for anonymous device isolation
+    'x-gemini-key',  # Optional header for Gemini AI features
 ]
 
 # Channels Layer: InMemory for local dev, Redis if REDIS_URL provided
@@ -149,4 +150,4 @@ else:
 # Gemini AI Settings
 GEMINI_API_KEY = config('GEMINI_API_KEY', default='')
 GEMINI_LIVE_MODEL = config('GEMINI_LIVE_MODEL', default='gemini-2.0-flash-exp')
-GEMINI_TEXT_MODEL = config('GEMINI_TEXT_MODEL', default='gemini-1.5-flash')
+GEMINI_TEXT_MODEL = config('GEMINI_TEXT_MODEL', default='gemini-3.5-flash')
