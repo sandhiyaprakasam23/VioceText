@@ -1,0 +1,72 @@
+[
+  {
+    "model": "transcriptions.transcription",
+    "pk": "a1111111-2222-3333-4444-555555555555",
+    "fields": {
+      "device_session_id": "default-anonymous-session",
+      "title": "காலை Standup Meeting & Architecture Discussion",
+      "text": "வணக்கம் அனைவருக்கும். Today we are launching the real-time transcription module with Gemini Live API proxy. இந்த system-ல் audio streaming ரொம்ப smooth-ஆ வேலை செய்யுது. We need to deploy the Daphne ASGI worker to Render and verify Postgres connection.",
+      "language": "ta-IN",
+      "detected_languages": ["ta", "en"],
+      "engine": "gemini-live",
+      "duration_seconds": 68,
+      "word_count": 39,
+      "is_favorite": true,
+      "is_archived": false,
+      "share_token": "demo-share-tamil-meeting-token",
+      "is_public": true,
+      "summary": "Real-time speech-to-text deployment discussion combining Tamil and English code-mixing. Backend Daphne ASGI worker to be verified on Render with PostgreSQL.",
+      "key_points": [
+        "Gemini Live API WebSocket proxy handling 16kHz audio stream",
+        "Daphne ASGI worker configured for production Render deployment",
+        "Code-mixed Tamil and English transcribed verbatim in native scripts"
+      ],
+      "action_items": [
+        "Deploy Daphne ASGI worker to Render",
+        "Verify PostgreSQL database connection string",
+        "Perform microphone test on Android Chrome and Safari"
+      ],
+      "translation": {
+        "en": "Hello everyone. Today we are launching the real-time transcription module with Gemini Live API proxy. Audio streaming is working very smoothly in this system. We need to deploy the Daphne ASGI worker to Render and verify Postgres connection.",
+        "ta": "வணக்கம் அனைவருக்கும். இன்று நாம் ஜெமினி லைவ் ஏபிஐ ப்ராக்ஸியுடன் நிகழ்நேர டிரான்ஸ்கிரிப்ஷன் தொகுதியை அறிமுகப்படுத்துகிறோம். இந்த கணினியில் ஆடியோ ஸ்ட்ரீமிங் மிகவும் சீராக வேலை செய்கிறது. நாம் டாப்னே ஏஎஸ்ஜிஐ தொழிலாளியை ரெண்டருக்கு நிலைநிறுத்தி போஸ்ட்கிரெஸ் இணைப்பை சரிபார்க்க வேண்டும்.",
+        "hi": "सभी को नमस्कार। आज हम जेमिनी लाइव एपीआई प्रॉक्सी के साथ रीयल-टाइम ट्रांसक्रिप्शन मॉड्यूल लॉन्च कर रहे हैं। इस सिस्टम में ऑडियो स्ट्रीमिंग बहुत सुचारू रूप से काम कर रही है। हमें डैफने एएसजीआई वर्कर को रेंडर पर तैनात करना होगा और पोस्टग्रेज कनेक्शन को सत्यापित करना होगा।"
+      },
+      "created_at": "2026-10-21T18:00:00Z",
+      "updated_at": "2026-10-21T18:00:00Z"
+    }
+  },
+  {
+    "model": "transcriptions.transcription",
+    "pk": "b2222222-3333-4444-5555-666666666666",
+    "fields": {
+      "device_session_id": "default-anonymous-session",
+      "title": "Hindi Product Strategy Sync",
+      "text": "नमस्ते टीम। Let us review the key deliverables for tonight. हमें real-time speech engine और fallback testing को complete करना है। All export formats like PDF and SRT are working perfectly.",
+      "language": "hi-IN",
+      "detected_languages": ["hi", "en"],
+      "engine": "gemini-live",
+      "duration_seconds": 45,
+      "word_count": 30,
+      "is_favorite": false,
+      "is_archived": false,
+      "share_token": "demo-share-hindi-sync-token",
+      "is_public": true,
+      "summary": "Hindi-English code-mixed strategy discussion reviewing tonight's deliverables including fallback testing and PDF/SRT exports.",
+      "key_points": [
+        "Speech engine fallback testing between Gemini Live and Web Speech API",
+        "Export formats including ReportLab PDF and SRT subtitles verified"
+      ],
+      "action_items": [
+        "Test Web Speech API fallback on Chrome and Safari",
+        "Export sample transcript as PDF and verify layout"
+      ],
+      "translation": {
+        "en": "Hello team. Let us review the key deliverables for tonight. We need to complete real-time speech engine and fallback testing. All export formats like PDF and SRT are working perfectly.",
+        "ta": "வணக்கம் குழுவினரே. இன்றிரவுக்கான முக்கிய பணிகளை மதிப்பாய்வு செய்வோம். நாம் நிகழ்நேர பேச்சு பொறி மற்றும் மாற்று சோதனையை முடிக்க வேண்டும். PDF மற்றும் SRT போன்ற அனைத்து ஏற்றுமதி வடிவங்களும் சரியாக வேலை செய்கின்றன.",
+        "hi": "नमस्ते टीम। आइए आज रात के प्रमुख कार्यों की समीक्षा करें। हमें रीयल-टाइम स्पीच इंजन और फॉलबैक परीक्षण को पूरा करना है। पीडीएफ और एसआरटी जैसे सभी निर्यात प्रारूप पूरी तरह से काम कर रहे हैं।"
+      },
+      "created_at": "2026-10-21T18:10:00Z",
+      "updated_at": "2026-10-21T18:10:00Z"
+    }
+  }
+]
