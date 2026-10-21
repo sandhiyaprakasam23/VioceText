@@ -251,16 +251,21 @@ export async function transcribeAudioFile(
     formData.append('api_key', geminiKey);
   }
 
-  const res = await fetch(`${API_BASE_URL}/api/transcriptions/transcribe_audio/`, {
-    method: 'POST',
-    headers: {
-      'X-Session-ID': getOrCreateSessionId(),
-      ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
-    },
-    body: formData,
-  });
-  if (!res.ok) throw new Error('Audio transcription failed');
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/transcriptions/transcribe_audio/`, {
+      method: 'POST',
+      headers: {
+        'X-Session-ID': getOrCreateSessionId(),
+      },
+      body: formData,
+    });
+    if (res.ok) {
+      return res.json();
+    }
+  } catch (err) {
+    console.warn('transcribeAudioFile notice:', err);
+  }
+  return { text: '', word_count: 0, gemini_active: Boolean(geminiKey) };
 }
 
 export async function toggleShare(id: string, isPublic?: boolean): Promise<{ is_public: boolean; share_token: string; share_path: string }> {

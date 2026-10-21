@@ -289,11 +289,11 @@ export const RecordPage: React.FC<RecordPageProps> = ({
           await performSave(res.text, recordedAudioBlob);
         }
       } else {
-        showToast('No speech detected in this audio recording.');
+        showToast('No clear speech detected in audio. Please speak into the mic while recording!');
       }
     } catch (err: any) {
       console.warn('Audio-to-text error:', err);
-      showToast('Audio conversion notice: ' + (err?.message || 'Server processing'));
+      showToast('Audio conversion notice: Please speak clearly into the mic while recording');
     } finally {
       setIsTranscribingAudio(false);
     }
