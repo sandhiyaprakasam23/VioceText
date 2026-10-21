@@ -4,7 +4,6 @@ import {
   MicOff,
   Pause,
   Play,
-  RotateCcw,
   Sparkles,
   Copy,
   Check,
@@ -13,12 +12,16 @@ import {
   Cpu,
   Globe,
   FileDown,
-  Layers,
-  ArrowRight,
-  Settings,
+  Save,
+  Download,
   AlertTriangle,
+  Search,
+  X,
+  FileText,
+  Clock,
+  ArrowRight,
 } from 'lucide-react';
-import { EngineType, Transcription, UserSettings, SUPPORTED_LANGUAGES } from '../types';
+import { EngineType, Transcription, UserSettings, SUPPORTED_LANGUAGES, LanguageOption } from '../types';
 import { WS_BASE_URL, createTranscription, uploadAudio, getOrCreateSessionId, getExportUrl } from '../services/api';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { useWebSpeech } from '../hooks/useWebSpeech';
@@ -36,23 +39,31 @@ interface RecordPageProps {
 export const RecordPage: React.FC<RecordPageProps> = ({
   settings,
   onNavigateToHistory,
-  onNavigateToSettings,
 }) => {
   const [selectedLanguage, setSelectedLanguage] = useState(settings.default_language || 'en-IN');
   const [activeEngine, setActiveEngine] = useState<EngineType>(settings.default_engine || 'gemini-live');
   const [engineFallbackNotice, setEngineFallbackNotice] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState('');
   const [isEditingTranscript, setIsEditingTranscript] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState('');
+  const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
   const [savedTranscription, setSavedTranscription] = useState<Transcription | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [langPickerOpen, setLangPickerOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [langModalOpen, setLangModalOpen] = useState(false);
+  const [langSearch, setLangSearch] = useState('');
 
   const wsRef = useRef<WebSocket | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Sync with settings
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 2500);
+  };
+
+  // Sync with user settings
   useEffect(() => {
     setSelectedLanguage(settings.default_language);
     setActiveEngine(settings.default_engine);
@@ -81,7 +92,6 @@ export const RecordPage: React.FC<RecordPageProps> = ({
 
   // Web Speech Fallback / Alternative Hook
   const {
-    isSupported: isWebSpeechSupported,
     startListening: startWebSpeech,
     stopListening: stopWebSpeech,
     resetTranscript: resetWebSpeech,
@@ -124,17 +134,14 @@ export const RecordPage: React.FC<RecordPageProps> = ({
             setLiveTranscript((prev) => (prev ? prev + ' ' + data.text : data.text));
           } else if (data.type === 'fallback_notice') {
             setEngineFallbackNotice(data.message);
-            // Seamlessly switch to Web Speech fallback
             setActiveEngine('browser-webspeech');
             startWebSpeech(selectedLanguage);
           }
-        } catch {
-          // Binary message or non-JSON
-        }
+        } catch {}
       };
 
       ws.onerror = () => {
-        setEngineFallbackNotice('Gemini Live WebSocket connection notice. Switching to browser Web Speech fallback.');
+        setEngineFallbackNotice('Gemini Live WebSocket notice. Seamlessly using Web Speech API fallback.');
         setActiveEngine('browser-webspeech');
         startWebSpeech(selectedLanguage);
         resolve(false);
@@ -150,14 +157,15 @@ export const RecordPage: React.FC<RecordPageProps> = ({
   const handleStartRecording = async () => {
     setLiveTranscript('');
     setSavedTranscription(null);
+    setRecordedAudioBlob(null);
+    setRecordedAudioUrl(null);
     setEngineFallbackNotice(null);
+    setSessionTitle('');
     resetWebSpeech();
 
-    // 1. Start audio capture & visualizer
     const micStarted = await startMic();
     if (!micStarted) return;
 
-    // 2. Start speech recognition engine
     if (activeEngine === 'gemini-live') {
       await connectGeminiWebSocket();
     } else {
@@ -167,10 +175,8 @@ export const RecordPage: React.FC<RecordPageProps> = ({
 
   // STOP RECORDING
   const handleStopRecording = async () => {
-    // 1. Stop mic and get recorded audio blob
     const { audioBlob, duration: finalDuration } = await stopMic();
 
-    // 2. Stop speech engines
     if (wsRef.current) {
       try {
         wsRef.current.send(JSON.stringify({ action: 'stop' }));
@@ -180,45 +186,61 @@ export const RecordPage: React.FC<RecordPageProps> = ({
     }
     stopWebSpeech();
 
-    // 3. Auto-copy to clipboard if enabled
-    if (settings.auto_copy_on_stop && liveTranscript.trim()) {
-      navigator.clipboard.writeText(liveTranscript);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+    if (audioBlob) {
+      setRecordedAudioBlob(audioBlob);
+      const url = URL.createObjectURL(audioBlob);
+      setRecordedAudioUrl(url);
     }
 
-    // 4. Save to backend database
-    if (settings.auto_save && liveTranscript.trim()) {
-      try {
-        setIsSaving(true);
-        const saved = await createTranscription({
-          text: liveTranscript.trim(),
-          language: selectedLanguage,
-          engine: activeEngine,
-          duration_seconds: finalDuration,
-        });
+    if (settings.auto_copy_on_stop && liveTranscript.trim()) {
+      navigator.clipboard.writeText(liveTranscript);
+      showToast('Copied to clipboard!');
+    }
 
-        // Upload audio file if recorded & enabled
-        if (settings.save_audio && audioBlob) {
-          try {
-            const withAudio = await uploadAudio(saved.id, audioBlob);
-            setSavedTranscription(withAudio);
-          } catch (audioErr) {
-            console.error('Audio upload notice:', audioErr);
-            setSavedTranscription(saved);
-          }
-        } else {
-          setSavedTranscription(saved);
-        }
-      } catch (err) {
-        console.error('Failed to auto-save transcription:', err);
-      } finally {
-        setIsSaving(false);
-      }
+    // Auto-save if enabled
+    if (settings.auto_save && liveTranscript.trim()) {
+      await performSave(liveTranscript.trim(), audioBlob, finalDuration);
     }
   };
 
-  // Toggle Recording via Mic Button or Spacebar
+  // MANUAL SAVE FUNCTION (Can be called anytime by clicking "Save Recording")
+  const performSave = async (textToSave = liveTranscript, blobToSave = recordedAudioBlob, dur = duration) => {
+    if (!textToSave.trim()) {
+      showToast('No transcript text to save yet!');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      const payload: Partial<Transcription> = {
+        title: sessionTitle.trim() || undefined,
+        text: textToSave.trim(),
+        language: selectedLanguage,
+        engine: activeEngine,
+        duration_seconds: dur,
+      };
+
+      const saved = await createTranscription(payload);
+
+      if (blobToSave) {
+        try {
+          const withAudio = await uploadAudio(saved.id, blobToSave);
+          setSavedTranscription(withAudio);
+        } catch {
+          setSavedTranscription(saved);
+        }
+      } else {
+        setSavedTranscription(saved);
+      }
+      showToast('✓ Recording & Transcript saved to History!');
+    } catch (err: any) {
+      console.error('Failed to save transcription:', err);
+      showToast('Failed to save recording: ' + (err?.message || 'Server error'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const toggleRecording = () => {
     if (recordingState === 'recording' || recordingState === 'paused') {
       handleStopRecording();
@@ -227,103 +249,114 @@ export const RecordPage: React.FC<RecordPageProps> = ({
     }
   };
 
-  // Keyboard shortcut listener: Space = start/stop, C = copy, S = share
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const activeEl = document.activeElement;
-      const isInput = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA';
-      if (isInput) return;
+  const handleCopy = () => {
+    if (!liveTranscript.trim()) return;
+    navigator.clipboard.writeText(liveTranscript);
+    showToast('Copied to clipboard!');
+  };
 
-      if (e.code === 'Space') {
-        e.preventDefault();
-        toggleRecording();
-      } else if (e.key === 'c' || e.key === 'C') {
-        if (liveTranscript) {
-          navigator.clipboard.writeText(liveTranscript);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        }
-      } else if (e.key === 's' || e.key === 'S') {
-        if (savedTranscription) {
-          setShowShareModal(true);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [recordingState, liveTranscript, savedTranscription]);
+  const handleDownloadLocalAudio = () => {
+    if (!recordedAudioBlob) return;
+    const url = URL.createObjectURL(recordedAudioBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `recording_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_')}.webm`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Audio download started');
+  };
 
-  const formatTimer = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  const handleDownloadText = () => {
+    if (!liveTranscript.trim()) return;
+    const blob = new Blob([liveTranscript], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `transcript_${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Transcript downloaded (.txt)');
   };
 
   const currentLangObj = SUPPORTED_LANGUAGES.find((l) => l.code === selectedLanguage) || SUPPORTED_LANGUAGES[0];
 
+  const quickLanguages = [
+    { code: 'multilingual', label: 'All / Code-Mixed', native: 'தமிழ் + Eng + हिन्दी' },
+    { code: 'ta-IN', label: 'Tamil', native: 'தமிழ்' },
+    { code: 'en-IN', label: 'English', native: 'English' },
+    { code: 'hi-IN', label: 'Hindi', native: 'हिन्दी' },
+    { code: 'te-IN', label: 'Telugu', native: 'తెలుగు' },
+    { code: 'ml-IN', label: 'Malayalam', native: 'മലയാളം' },
+  ];
+
+  const filteredLanguages = SUPPORTED_LANGUAGES.filter(
+    (l) =>
+      l.label.toLowerCase().includes(langSearch.toLowerCase()) ||
+      l.native.toLowerCase().includes(langSearch.toLowerCase()) ||
+      l.code.toLowerCase().includes(langSearch.toLowerCase())
+  );
+
   return (
     <div className="w-full max-w-5xl mx-auto flex flex-col items-center gap-6 pb-20">
-      {/* Toast Feedback */}
-      {copied && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 bg-cyber-primary text-black font-semibold px-4 py-2 rounded-full shadow-cyan-glow flex items-center gap-2 text-xs">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 bg-cyber-primary text-black font-semibold px-4 py-2 rounded-full shadow-cyan-glow flex items-center gap-2 text-xs animate-bounce">
           <Check className="w-4 h-4" />
-          <span>Copied to clipboard!</span>
+          <span>{toastMessage}</span>
         </div>
       )}
 
       {/* Main Glassmorphism Centerpiece Card */}
       <div className="w-full max-w-xl bg-cyber-card/90 border border-cyber-primary/30 rounded-28 p-6 md:p-8 backdrop-blur-xl shadow-cyan-glow corner-bracket flex flex-col items-center text-center relative overflow-hidden">
         {/* Top Header */}
-        <div className="space-y-1 mb-5">
+        <div className="space-y-1 mb-4">
           <h1 className="text-xl md:text-2xl font-extrabold uppercase tracking-widest text-cyber-text">
             REAL-TIME TRANSCRIPTION
           </h1>
-          <p className="text-xs text-cyber-muted font-mono tracking-wide">Live audio to text</p>
+          <p className="text-xs text-cyber-muted font-mono tracking-wide">Live Multilingual Audio to Text</p>
         </div>
 
-        {/* Language Pill Chip (English · Tamil) */}
-        <div className="relative mb-6">
-          <button
-            onClick={() => setLangPickerOpen(!langPickerOpen)}
-            className="px-4 py-1.5 rounded-full bg-cyan-950/60 border border-cyber-primary text-cyber-text text-xs font-mono flex items-center gap-2 shadow-cyan-glow-sm hover:border-cyber-accent transition-all"
-          >
-            <Globe className="w-3.5 h-3.5 text-cyber-primary" />
-            <span className="font-semibold">{currentLangObj.label} · {currentLangObj.native}</span>
-          </button>
+        {/* Quick Language Selection Chips Bar */}
+        <div className="w-full flex flex-col items-center gap-2 mb-4">
+          <div className="flex flex-wrap items-center justify-center gap-1.5 max-w-lg">
+            {quickLanguages.map((l) => (
+              <button
+                key={l.code}
+                onClick={() => setSelectedLanguage(l.code)}
+                className={`px-3 py-1 rounded-full text-xs font-mono transition-all flex items-center gap-1.5 ${
+                  selectedLanguage === l.code
+                    ? 'bg-cyber-primary text-black font-bold shadow-cyan-glow-sm'
+                    : 'bg-black/50 border border-cyber-primary/30 text-cyber-muted hover:text-cyber-primary hover:border-cyber-primary'
+                }`}
+              >
+                <span>{l.label}</span>
+                <span className="text-[10px] opacity-80">({l.native})</span>
+              </button>
+            ))}
 
-          {/* Language Picker Dropdown */}
-          {langPickerOpen && (
-            <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 z-30 bg-cyber-bg/95 border border-cyber-primary/50 rounded-2xl p-2 shadow-cyan-glow-lg min-w-[220px] text-left font-mono text-xs">
-              <p className="px-3 py-1 text-[10px] uppercase text-cyber-muted tracking-wider border-b border-cyber-primary/20 mb-1">
-                Select Spoken Language
-              </p>
-              {SUPPORTED_LANGUAGES.map((l) => (
-                <button
-                  key={l.code}
-                  onClick={() => {
-                    setSelectedLanguage(l.code);
-                    setLangPickerOpen(false);
-                  }}
-                  className={`w-full px-3 py-1.5 rounded-xl text-left flex items-center justify-between transition-colors ${
-                    selectedLanguage === l.code ? 'bg-cyber-primary/20 text-cyber-primary font-bold' : 'text-cyber-text/80 hover:bg-cyber-primary/10'
-                  }`}
-                >
-                  <span>{l.label}</span>
-                  <span className="text-[11px] text-cyber-muted">{l.native}</span>
-                </button>
-              ))}
-            </div>
-          )}
+            <button
+              onClick={() => setLangModalOpen(true)}
+              className="px-3 py-1 rounded-full text-xs font-mono bg-cyan-950/70 border border-cyber-accent text-cyber-accent hover:bg-cyan-900/60 transition-colors flex items-center gap-1"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>More Languages ({SUPPORTED_LANGUAGES.length})</span>
+            </button>
+          </div>
         </div>
 
-        {/* Engine Badge & Fallback Warning */}
+        {/* Engine Switcher & Status */}
         <div className="flex flex-col items-center gap-1.5 mb-5">
           <div className="flex items-center gap-2 text-[11px] font-mono">
             <span className="text-cyber-muted">Engine:</span>
-            <span className="px-2.5 py-0.5 rounded-full bg-black/50 border border-cyber-primary/30 text-cyber-primary flex items-center gap-1">
+            <button
+              onClick={() => setActiveEngine(activeEngine === 'gemini-live' ? 'browser-webspeech' : 'gemini-live')}
+              className="px-2.5 py-0.5 rounded-full bg-black/60 border border-cyber-primary/30 text-cyber-primary hover:border-cyber-primary transition-colors flex items-center gap-1 cursor-pointer"
+              title="Click to toggle speech engine"
+            >
               <Cpu className="w-3 h-3" />
               <span>{activeEngine === 'gemini-live' ? '⚡ Gemini Live API' : '🌐 Browser Web Speech'}</span>
-            </span>
+              <span className="text-[9px] text-cyber-muted">(Switch)</span>
+            </button>
           </div>
           {engineFallbackNotice && (
             <div className="flex items-center gap-1.5 text-[11px] font-mono text-amber-300 bg-amber-950/40 border border-amber-500/30 px-3 py-1 rounded-xl">
@@ -335,10 +368,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({
 
         {/* Glowing Symmetrical Waveform Frame */}
         <div className="w-full max-w-md h-28 bg-black/40 border border-cyber-primary/25 rounded-24 p-3 relative flex items-center justify-center gap-1.5 mb-5 overflow-hidden">
-          {/* Subtle grid in visualizer box */}
           <div className="absolute inset-0 cyber-grid opacity-30 pointer-events-none" />
-
-          {/* Symmetrical audio bars */}
           {audioLevel.map((lvl, index) => {
             const isRecording = recordingState === 'recording';
             const barHeight = isRecording ? lvl : 15;
@@ -355,22 +385,23 @@ export const RecordPage: React.FC<RecordPageProps> = ({
           })}
         </div>
 
-        {/* Thin Cyan Progress / Seek Bar with Timestamps */}
+        {/* Seek / Progress Bar with Running Timers */}
         <div className="w-full max-w-md mb-8">
           <div className="relative w-full h-1 bg-cyan-950 rounded-full overflow-hidden flex items-center">
             <div
               className="h-full bg-cyber-primary transition-all duration-200"
               style={{ width: `${Math.min(100, (duration / 90) * 100)}%` }}
             />
-            {/* Glowing dot */}
             <div
               className="absolute w-2.5 h-2.5 rounded-full bg-cyber-accent shadow-cyan-glow top-1/2 -translate-y-1/2"
               style={{ left: `calc(${Math.min(98, (duration / 90) * 100)}% - 4px)` }}
             />
           </div>
           <div className="flex justify-between items-center text-xs font-mono text-cyber-muted mt-2">
-            <span className="text-cyber-primary">{formatTimer(duration)}</span>
-            <span>{recordingState === 'recording' ? 'LIVE' : 'MAX 01:30'}</span>
+            <span className="text-cyber-primary">
+              {Math.floor(duration / 60).toString().padStart(2, '0')}:{(duration % 60).toString().padStart(2, '0')}
+            </span>
+            <span>{recordingState === 'recording' ? '● LIVE RECORDING' : 'MAX 01:30'}</span>
           </div>
         </div>
 
@@ -392,7 +423,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({
             )}
           </button>
 
-          <span className="text-xs font-mono uppercase tracking-widest text-cyber-text">
+          <span className="text-xs font-mono uppercase tracking-widest text-cyber-text font-bold">
             {recordingState === 'recording'
               ? 'Stop recording'
               : recordingState === 'connecting'
@@ -404,7 +435,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({
           {recordingState === 'recording' && (
             <button
               onClick={pauseMic}
-              className="px-3 py-1 rounded-xl bg-black/40 border border-cyber-primary/30 text-cyber-muted hover:text-cyber-primary text-xs flex items-center gap-1"
+              className="px-3 py-1 rounded-xl bg-black/40 border border-cyber-primary/30 text-cyber-muted hover:text-cyber-primary text-xs flex items-center gap-1 font-mono"
             >
               <Pause className="w-3.5 h-3.5" />
               <span>Pause</span>
@@ -413,7 +444,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({
           {recordingState === 'paused' && (
             <button
               onClick={resumeMic}
-              className="px-3 py-1 rounded-xl bg-cyber-primary/20 border border-cyber-primary text-cyber-primary text-xs flex items-center gap-1 animate-pulse"
+              className="px-3 py-1 rounded-xl bg-cyber-primary/20 border border-cyber-primary text-cyber-primary text-xs flex items-center gap-1 animate-pulse font-mono"
             >
               <Play className="w-3.5 h-3.5 fill-cyber-primary" />
               <span>Resume</span>
@@ -421,7 +452,6 @@ export const RecordPage: React.FC<RecordPageProps> = ({
           )}
         </div>
 
-        {/* Mic Error Banner */}
         {micError && (
           <p className="mt-4 text-xs font-mono text-red-400 bg-red-950/40 p-2 rounded-xl border border-red-500/30">
             {micError}
@@ -429,76 +459,153 @@ export const RecordPage: React.FC<RecordPageProps> = ({
         )}
       </div>
 
-      {/* Live Transcript Display Box */}
-      <div className="w-full max-w-xl bg-cyber-card/85 border border-cyber-primary/25 rounded-28 p-5 backdrop-blur-md shadow-sm space-y-3">
+      {/* Live Transcript Display Box with Action Buttons Bar */}
+      <div className="w-full max-w-xl bg-cyber-card/85 border border-cyber-primary/25 rounded-28 p-5 backdrop-blur-md shadow-sm space-y-4">
+        {/* Box Header */}
         <div className="flex items-center justify-between pb-2 border-b border-cyber-primary/15">
           <div className="flex items-center gap-2 text-xs font-mono text-cyber-muted">
-            <span className="w-2 h-2 rounded-full bg-cyber-primary animate-ping" />
+            <span className={`w-2 h-2 rounded-full ${recordingState === 'recording' ? 'bg-cyber-primary animate-ping' : 'bg-gray-500'}`} />
             <span>Live Transcript Stream</span>
           </div>
-          {liveTranscript && (
-            <div className="flex items-center gap-2">
-              <TextToSpeechPlayer text={liveTranscript} language={selectedLanguage} />
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(liveTranscript);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                }}
-                className="p-1 text-cyber-muted hover:text-cyber-primary transition-colors"
-                title="Copy live text"
-              >
-                {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-              </button>
-            </div>
-          )}
+
+          {/* Direct Top Controls: Listen (TTS) & Word Count */}
+          <div className="flex items-center gap-2">
+            {liveTranscript && (
+              <>
+                <TextToSpeechPlayer text={liveTranscript} language={selectedLanguage} />
+                <span className="text-[10px] font-mono text-cyber-muted">
+                  {liveTranscript.trim().split(/\s+/).filter(Boolean).length} words
+                </span>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Text Area */}
+        {/* Editable Transcript Area */}
         <textarea
           value={liveTranscript}
           onChange={(e) => {
             setIsEditingTranscript(true);
             setLiveTranscript(e.target.value);
           }}
-          placeholder="Press the microphone button to start transcribing live speech... Multilingual Tamil, English, Hindi code-mixing will appear here in real time."
-          rows={5}
+          placeholder="Speak into your mic... Words in Tamil, English, Hindi, and other languages appear here live as you talk. You can also edit this text anytime."
+          rows={6}
           className="w-full bg-black/40 border border-cyber-primary/20 rounded-2xl p-4 font-mono text-xs md:text-sm text-cyber-text leading-relaxed placeholder:text-cyber-muted/50 focus:outline-none focus:border-cyber-primary resize-y"
         />
         <div ref={transcriptEndRef} />
 
-        {isSaving && (
-          <p className="text-xs font-mono text-cyber-accent animate-pulse flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 animate-spin" />
-            <span>Saving transcription & uploading audio file...</span>
-          </p>
-        )}
-      </div>
-
-      {/* Post-Recording Action & AI Assistant Section */}
-      {savedTranscription && (
-        <div className="w-full max-w-xl space-y-4 animate-fade-in">
-          {/* Success Banner */}
-          <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-24 p-4 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs font-mono text-emerald-300">
-              <Check className="w-4 h-4 text-emerald-400" />
-              <span>Session saved to History database!</span>
-            </div>
+        {/* PROMINENT ACTION BUTTONS: Copy, Share, Save Recording, Download Audio, Export */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-cyber-primary/15">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Copy Button */}
             <button
-              onClick={() => setShowShareModal(true)}
-              className="px-3 py-1 rounded-xl bg-emerald-500/20 border border-emerald-400 text-emerald-300 text-xs font-mono flex items-center gap-1 hover:bg-emerald-500/30 transition-colors"
+              onClick={handleCopy}
+              disabled={!liveTranscript.trim()}
+              className="px-3 py-1.5 rounded-xl bg-black/50 border border-cyber-primary/30 hover:bg-cyber-primary/20 text-cyber-primary text-xs font-mono flex items-center gap-1.5 transition-colors disabled:opacity-40"
+              title="Copy text to clipboard"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              <span>Copy</span>
+            </button>
+
+            {/* Share Button */}
+            <button
+              onClick={() => {
+                if (savedTranscription) {
+                  setShowShareModal(true);
+                } else if (liveTranscript.trim()) {
+                  // Save first then open share modal
+                  performSave().then(() => setShowShareModal(true));
+                } else {
+                  showToast('Record or type some text first to share!');
+                }
+              }}
+              disabled={!liveTranscript.trim()}
+              className="px-3 py-1.5 rounded-xl bg-black/50 border border-cyber-primary/30 hover:bg-cyber-primary/20 text-cyber-accent text-xs font-mono flex items-center gap-1.5 transition-colors disabled:opacity-40"
+              title="Share recording & link"
             >
               <Share2 className="w-3.5 h-3.5" />
               <span>Share</span>
             </button>
+
+            {/* Download Audio (when recorded) */}
+            {recordedAudioBlob && (
+              <button
+                onClick={handleDownloadLocalAudio}
+                className="px-3 py-1.5 rounded-xl bg-black/50 border border-cyber-primary/30 hover:bg-cyber-primary/20 text-cyber-primary text-xs font-mono flex items-center gap-1.5 transition-colors"
+                title="Download recorded audio file"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Audio</span>
+              </button>
+            )}
+
+            {/* Download Text */}
+            <button
+              onClick={handleDownloadText}
+              disabled={!liveTranscript.trim()}
+              className="px-3 py-1.5 rounded-xl bg-black/50 border border-cyber-primary/30 hover:bg-cyber-primary/20 text-cyber-muted hover:text-white text-xs font-mono flex items-center gap-1.5 transition-colors disabled:opacity-40"
+              title="Download text file (.txt)"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              <span>TXT</span>
+            </button>
           </div>
 
-          {/* Audio Player if available */}
-          {savedTranscription.audio_url && (
-            <AudioPlayer src={savedTranscription.audio_url} title={savedTranscription.title} />
-          )}
+          {/* MAIN PROMINENT SAVE RECORDING BUTTON */}
+          <button
+            onClick={() => performSave()}
+            disabled={isSaving || !liveTranscript.trim()}
+            className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-cyber-primary to-cyan-500 text-black font-bold text-xs font-mono flex items-center gap-1.5 hover:shadow-cyan-glow-sm transition-all disabled:opacity-50"
+          >
+            {isSaving ? (
+              <>
+                <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                <span>Saving...</span>
+              </>
+            ) : savedTranscription ? (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                <span>Saved ✓</span>
+              </>
+            ) : (
+              <>
+                <Save className="w-3.5 h-3.5" />
+                <span>Save Recording</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
 
-          {/* AI Assistant Panel */}
+      {/* Post-Recording Audio Player Preview & History Navigation */}
+      {(recordedAudioUrl || savedTranscription?.audio_url) && (
+        <div className="w-full max-w-xl space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between text-xs font-mono text-cyber-accent">
+            <span className="flex items-center gap-1.5">
+              <Volume2 className="w-4 h-4" />
+              <span>Recording Audio Playback</span>
+            </span>
+            {savedTranscription && (
+              <button
+                onClick={onNavigateToHistory}
+                className="text-cyber-primary hover:underline flex items-center gap-1"
+              >
+                <span>View in History</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          <AudioPlayer
+            src={savedTranscription?.audio_url || recordedAudioUrl!}
+            title={savedTranscription?.title || sessionTitle || 'Recording'}
+          />
+        </div>
+      )}
+
+      {/* AI Assistant Panel */}
+      {savedTranscription && (
+        <div className="w-full max-w-xl animate-fade-in">
           <AiAssistantPanel
             transcription={savedTranscription}
             onUpdate={(updated) => setSavedTranscription(updated)}
@@ -506,16 +613,74 @@ export const RecordPage: React.FC<RecordPageProps> = ({
         </div>
       )}
 
-      {/* Keyboard Shortcuts Hint Bar */}
-      <div className="flex items-center gap-3 text-[11px] font-mono text-cyber-muted/70 bg-black/30 border border-cyber-primary/15 px-4 py-2 rounded-full">
-        <span>[Space] Record/Stop</span>
-        <span>•</span>
-        <span>[C] Copy</span>
-        <span>•</span>
-        <span>[S] Share</span>
-        <span>•</span>
-        <span>[/] Search</span>
-      </div>
+      {/* FULL LANGUAGE CHOOSER MODAL (Searches all 20+ languages) */}
+      {langModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
+          <div className="relative w-full max-w-lg bg-cyber-bg/95 border border-cyber-primary/40 rounded-28 p-6 shadow-cyan-glow-lg text-cyber-text">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-cyber-primary/20">
+              <div className="flex items-center gap-2">
+                <Globe className="w-5 h-5 text-cyber-primary" />
+                <h3 className="text-base font-bold tracking-wide uppercase text-cyber-primary">
+                  Choose Language / Dialect
+                </h3>
+              </div>
+              <button
+                onClick={() => setLangModalOpen(false)}
+                className="p-1 rounded-lg text-cyber-muted hover:text-cyber-primary hover:bg-cyber-primary/10 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search Input */}
+            <div className="relative mt-4 mb-4">
+              <Search className="w-4 h-4 text-cyber-muted absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search languages by name or code (e.g. Tamil, தமிழ், ta-IN)..."
+                value={langSearch}
+                onChange={(e) => setLangSearch(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 bg-black/50 border border-cyber-primary/30 rounded-xl text-xs text-cyber-text font-mono focus:outline-none focus:border-cyber-primary"
+                autoFocus
+              />
+            </div>
+
+            {/* Language Grid */}
+            <div className="max-h-72 overflow-y-auto space-y-1.5 pr-1">
+              {filteredLanguages.map((l) => (
+                <button
+                  key={l.code}
+                  onClick={() => {
+                    setSelectedLanguage(l.code);
+                    setLangModalOpen(false);
+                    showToast(`Language set to ${l.label} (${l.native})`);
+                  }}
+                  className={`w-full p-2.5 rounded-xl border flex items-center justify-between text-xs font-mono transition-all ${
+                    selectedLanguage === l.code
+                      ? 'bg-cyber-primary/20 border-cyber-primary text-cyber-primary font-bold shadow-cyan-glow-sm'
+                      : 'bg-black/30 border-cyber-primary/15 text-cyber-text/80 hover:bg-cyber-primary/10 hover:border-cyber-primary/30'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-white">{l.label}</span>
+                    <span className="text-[11px] text-cyber-primary">({l.native})</span>
+                  </div>
+                  <span className="text-[10px] text-cyber-muted bg-black/50 px-2 py-0.5 rounded border border-cyber-primary/20">
+                    {l.code}
+                  </span>
+                </button>
+              ))}
+
+              {filteredLanguages.length === 0 && (
+                <p className="text-center py-6 text-xs text-cyber-muted font-mono">
+                  No language matched "{langSearch}".
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Share Modal */}
       {showShareModal && savedTranscription && (

@@ -55,14 +55,31 @@ export interface LanguageOption {
   code: string;
   label: string;
   native: string;
+  region?: string;
 }
 
 export const SUPPORTED_LANGUAGES: LanguageOption[] = [
-  { code: 'en-IN', label: 'English (India)', native: 'English' },
-  { code: 'ta-IN', label: 'Tamil', native: 'தமிழ்' },
-  { code: 'hi-IN', label: 'Hindi', native: 'हिन्दी' },
-  { code: 'te-IN', label: 'Telugu', native: 'తెలుగు' },
-  { code: 'ml-IN', label: 'Malayalam', native: 'മലയാളം' },
-  { code: 'kn-IN', label: 'Kannada', native: 'ಕನ್ನಡ' },
-  { code: 'multilingual', label: 'Multilingual / Mixed', native: 'Tamil + English + Hindi' },
+  // Multilingual & Indian Languages
+  { code: 'multilingual', label: 'Multilingual / Code-Mixed', native: 'தமிழ் + English + हिन्दी', region: 'India' },
+  { code: 'ta-IN', label: 'Tamil', native: 'தமிழ்', region: 'India' },
+  { code: 'en-IN', label: 'English (India)', native: 'English (IN)', region: 'India' },
+  { code: 'hi-IN', label: 'Hindi', native: 'हिन्दी', region: 'India' },
+  { code: 'te-IN', label: 'Telugu', native: 'తెలుగు', region: 'India' },
+  { code: 'ml-IN', label: 'Malayalam', native: 'മലയാളം', region: 'India' },
+  { code: 'kn-IN', label: 'Kannada', native: 'ಕನ್ನಡ', region: 'India' },
+  { code: 'bn-IN', label: 'Bengali', native: 'বাংলা', region: 'India' },
+  { code: 'mr-IN', label: 'Marathi', native: 'मराठी', region: 'India' },
+  { code: 'gu-IN', label: 'Gujarati', native: 'ગુજરાતી', region: 'India' },
+  { code: 'pa-IN', label: 'Punjabi', native: 'ਪੰਜਾਬੀ', region: 'India' },
+  { code: 'ur-IN', label: 'Urdu', native: 'اردو', region: 'India' },
+
+  // International Languages
+  { code: 'en-US', label: 'English (US)', native: 'English (US)', region: 'International' },
+  { code: 'en-GB', label: 'English (UK)', native: 'English (UK)', region: 'International' },
+  { code: 'es-ES', label: 'Spanish', native: 'Español', region: 'International' },
+  { code: 'fr-FR', label: 'French', native: 'Français', region: 'International' },
+  { code: 'de-DE', label: 'German', native: 'Deutsch', region: 'International' },
+  { code: 'ar-SA', label: 'Arabic', native: 'العربية', region: 'International' },
+  { code: 'ja-JP', label: 'Japanese', native: '日本語', region: 'International' },
+  { code: 'zh-CN', label: 'Chinese (Mandarin)', native: '中文', region: 'International' },
 ];
