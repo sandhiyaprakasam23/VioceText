@@ -157,3 +157,15 @@ class TranscriptionAPITestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("text", response.data)
         self.assertEqual(response.data["language"], "ta-IN")
+
+    def test_translate_endpoint(self):
+        """Test real-time translate endpoint translating Tamil speech to English."""
+        response = self.client.post(
+            "/api/transcriptions/translate/",
+            {"text": "வணக்கம், எப்படி இருக்கீங்க?", "target_lang": "en"},
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("translated_text", response.data)
+        self.assertTrue(len(response.data["translated_text"]) > 0)
+        self.assertEqual(response.data["target_lang"], "en")

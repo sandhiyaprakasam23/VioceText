@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { translateLiveText, isPureEnglish, containsTamil } from '../services/translator';
 
 interface IWindow extends Window {
   SpeechRecognition?: any;
@@ -18,14 +19,42 @@ export function useWebSpeech({
 
   const recognitionRef = useRef<any>(null);
   const shouldListenRef = useRef(false);
-  const sessionBaseTextRef = useRef(''); // Finalized text preserved across speech sessions
-  const currentSessionFinalRef = useRef(''); // Finalized text in current active recognition object
-  const currentLanguageRef = useRef(language);
 
-  // Sync language ref whenever language changes
+  // Translation accumulators
+  const translatedBaseTextRef = useRef(''); // Finalized text across restarts
+  const translatedFinalTextRef = useRef(''); // Finalized text in current session
+  const translatedInterimTextRef = useRef(''); // Interim text being spoken now
+  const lastTranslatedFinalRawRef = useRef(''); // Deduplicate final translations
+  const interimSeqRef = useRef(0);
+  const interimDebounceTimerRef = useRef<number | null>(null);
+
+  const currentLanguageRef = useRef(language);
+  const onTranscriptUpdateRef = useRef(onTranscriptUpdate);
+
+  // Sync references
   useEffect(() => {
     currentLanguageRef.current = language;
   }, [language]);
+
+  useEffect(() => {
+    onTranscriptUpdateRef.current = onTranscriptUpdate;
+  }, [onTranscriptUpdate]);
+
+  const emitCombinedTranscript = useCallback(() => {
+    const combined = [
+      translatedBaseTextRef.current,
+      translatedFinalTextRef.current,
+      translatedInterimTextRef.current,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (combined) {
+      onTranscriptUpdateRef.current(combined);
+    }
+  }, []);
 
   const isSupported = typeof window !== 'undefined' && Boolean(
     (window as IWindow).SpeechRecognition || (window as IWindow).webkitSpeechRecognition
@@ -37,7 +66,7 @@ export function useWebSpeech({
       return false;
     }
 
-    // Terminate any previous instance cleanly
+    // Cleanly terminate any active instance
     if (recognitionRef.current) {
       try {
         recognitionRef.current.onend = null;
@@ -51,17 +80,32 @@ export function useWebSpeech({
     shouldListenRef.current = true;
     setError(null);
 
-    const targetLang = langToUse || currentLanguageRef.current || 'ta-IN';
-    const cleanLang = targetLang === 'multilingual' ? 'ta-IN' : targetLang;
+    const targetOutputLang = langToUse || currentLanguageRef.current || 'ta-IN';
+
+    // In Indian/Tamil context, Chrome's 'ta-IN' engine recognizes:
+    // 1. Tamil speech ("வணக்கம், எப்படி இருக்கீங்க?"),
+    // 2. Code-mixed Tanglish speech,
+    // 3. Spoken English words and phrases.
+    // When the output language is English, we listen with 'ta-IN' and translate
+    // Tamil speech into English in real-time.
+    let speechInputLang = targetOutputLang;
+    if (
+      targetOutputLang === 'multilingual' ||
+      targetOutputLang.startsWith('en') ||
+      targetOutputLang.startsWith('ta')
+    ) {
+      speechInputLang = 'ta-IN';
+    }
 
     const createAndStart = () => {
       if (!shouldListenRef.current) return;
 
       try {
-        const SpeechRecognitionClass = (window as IWindow).SpeechRecognition || (window as IWindow).webkitSpeechRecognition;
+        const SpeechRecognitionClass =
+          (window as IWindow).SpeechRecognition || (window as IWindow).webkitSpeechRecognition;
         const recognition = new SpeechRecognitionClass();
 
-        recognition.lang = cleanLang;
+        recognition.lang = speechInputLang;
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.maxAlternatives = 1;
@@ -87,36 +131,84 @@ export function useWebSpeech({
           setIsSpeaking(false);
         };
 
-        recognition.onresult = (event: any) => {
-          let interimText = '';
-          let finalText = '';
+        recognition.onresult = async (event: any) => {
+          let interimRaw = '';
+          let finalRaw = '';
 
           for (let i = 0; i < event.results.length; ++i) {
             const res = event.results[i];
             if (res && res[0]) {
               const text = res[0].transcript || '';
               if (res.isFinal) {
-                finalText += text + ' ';
+                finalRaw += text + ' ';
               } else {
-                interimText += text;
+                interimRaw += text;
               }
             }
           }
 
-          currentSessionFinalRef.current = finalText;
+          finalRaw = finalRaw.trim();
+          interimRaw = interimRaw.trim();
+          const targetLang = currentLanguageRef.current;
 
-          const fullCombined = [
-            sessionBaseTextRef.current,
-            finalText,
-            interimText
-          ]
-            .filter(Boolean)
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+          // 1. Handle finalized speech segments
+          if (finalRaw && finalRaw !== lastTranslatedFinalRawRef.current) {
+            lastTranslatedFinalRawRef.current = finalRaw;
 
-          if (fullCombined) {
-            onTranscriptUpdate(fullCombined);
+            // If target is English and text is already pure English, 0ms latency
+            if (targetLang.startsWith('en') && isPureEnglish(finalRaw)) {
+              translatedFinalTextRef.current = finalRaw;
+              emitCombinedTranscript();
+            } else if (targetLang.startsWith('ta') && containsTamil(finalRaw) && !/[a-zA-Z]/.test(finalRaw)) {
+              // If target is Tamil and text is already pure Tamil, 0ms latency
+              translatedFinalTextRef.current = finalRaw;
+              emitCombinedTranscript();
+            } else {
+              // Real-time translation to chosen output language
+              translateLiveText(finalRaw, targetLang).then((translated) => {
+                if (shouldListenRef.current) {
+                  translatedFinalTextRef.current = translated;
+                  emitCombinedTranscript();
+                }
+              });
+            }
+          }
+
+          // 2. Handle live interim speech stream (real-time display while speaking)
+          if (!interimRaw) {
+            translatedInterimTextRef.current = '';
+            emitCombinedTranscript();
+          } else {
+            // If target is English and interim text is already pure English: instant 0ms update
+            if (targetLang.startsWith('en') && isPureEnglish(interimRaw)) {
+              translatedInterimTextRef.current = interimRaw;
+              emitCombinedTranscript();
+            } else if (targetLang.startsWith('ta') && containsTamil(interimRaw) && !/[a-zA-Z]/.test(interimRaw)) {
+              // If target is Tamil and interim is pure Tamil: instant 0ms update
+              translatedInterimTextRef.current = interimRaw;
+              emitCombinedTranscript();
+            } else {
+              // Debounce interim translation slightly (70ms) to prevent network stutter mid-syllable
+              if (interimDebounceTimerRef.current) {
+                clearTimeout(interimDebounceTimerRef.current);
+              }
+              const currentSeq = ++interimSeqRef.current;
+              interimDebounceTimerRef.current = window.setTimeout(async () => {
+                try {
+                  const translated = await translateLiveText(interimRaw, targetLang);
+                  if (shouldListenRef.current && currentSeq === interimSeqRef.current) {
+                    translatedInterimTextRef.current = translated;
+                    emitCombinedTranscript();
+                  }
+                } catch {
+                  // Fallback to raw interim on unexpected error
+                  if (shouldListenRef.current && currentSeq === interimSeqRef.current) {
+                    translatedInterimTextRef.current = interimRaw;
+                    emitCombinedTranscript();
+                  }
+                }
+              }, 70);
+            }
           }
         };
 
@@ -139,15 +231,22 @@ export function useWebSpeech({
 
         recognition.onend = () => {
           setIsSpeaking(false);
-          // If user didn't click stop, accumulate finalized text and start a fresh instance
+          // If recording wasn't stopped, commit finalized text and restart cleanly
           if (shouldListenRef.current) {
-            if (currentSessionFinalRef.current) {
-              sessionBaseTextRef.current = [sessionBaseTextRef.current, currentSessionFinalRef.current]
+            if (translatedFinalTextRef.current) {
+              translatedBaseTextRef.current = [
+                translatedBaseTextRef.current,
+                translatedFinalTextRef.current,
+              ]
                 .filter(Boolean)
                 .join(' ')
                 .trim();
-              currentSessionFinalRef.current = '';
+              translatedFinalTextRef.current = '';
+              lastTranslatedFinalRawRef.current = '';
             }
+            translatedInterimTextRef.current = '';
+            emitCombinedTranscript();
+
             // 80ms breather before starting fresh instance to avoid browser rate limit
             setTimeout(() => {
               if (shouldListenRef.current) {
@@ -171,12 +270,17 @@ export function useWebSpeech({
     };
 
     return createAndStart();
-  }, [isSupported, onTranscriptUpdate]);
+  }, [isSupported, emitCombinedTranscript]);
 
   const stopListening = useCallback(() => {
     shouldListenRef.current = false;
     setIsListening(false);
     setIsSpeaking(false);
+
+    if (interimDebounceTimerRef.current) {
+      clearTimeout(interimDebounceTimerRef.current);
+      interimDebounceTimerRef.current = null;
+    }
 
     if (recognitionRef.current) {
       try {
@@ -188,23 +292,39 @@ export function useWebSpeech({
       recognitionRef.current = null;
     }
 
-    if (currentSessionFinalRef.current) {
-      sessionBaseTextRef.current = [sessionBaseTextRef.current, currentSessionFinalRef.current]
+    if (translatedFinalTextRef.current) {
+      translatedBaseTextRef.current = [
+        translatedBaseTextRef.current,
+        translatedFinalTextRef.current,
+      ]
         .filter(Boolean)
         .join(' ')
         .trim();
-      currentSessionFinalRef.current = '';
+      translatedFinalTextRef.current = '';
+      lastTranslatedFinalRawRef.current = '';
     }
-  }, []);
+    translatedInterimTextRef.current = '';
+    emitCombinedTranscript();
+  }, [emitCombinedTranscript]);
 
   const resetTranscript = useCallback(() => {
-    sessionBaseTextRef.current = '';
-    currentSessionFinalRef.current = '';
+    translatedBaseTextRef.current = '';
+    translatedFinalTextRef.current = '';
+    translatedInterimTextRef.current = '';
+    lastTranslatedFinalRawRef.current = '';
+    interimSeqRef.current = 0;
+    if (interimDebounceTimerRef.current) {
+      clearTimeout(interimDebounceTimerRef.current);
+      interimDebounceTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
     return () => {
       shouldListenRef.current = false;
+      if (interimDebounceTimerRef.current) {
+        clearTimeout(interimDebounceTimerRef.current);
+      }
       if (recognitionRef.current) {
         try {
           recognitionRef.current.onend = null;

@@ -96,13 +96,21 @@ class LiveTranscriptionConsumer(AsyncWebsocketConsumer):
             client = genai.Client(api_key=gemini_key)
             model = getattr(settings, "GEMINI_LIVE_MODEL", "gemini-2.0-flash-exp")
 
-            system_instruction = (
-                "You are an expert real-time speech transcriber. "
-                "Listen to the live audio stream and transcribe every word exactly as spoken. "
-                "Support multilingual and code-mixed speech (e.g. Tamil + English, Hindi + English). "
-                "Keep each language in its native script: write Tamil words in Tamil script, Hindi in Devanagari script, "
-                "and English in Latin script. Do not translate. Output ONLY the verbatim spoken transcript."
-            )
+            if self.client_language and self.client_language.startswith("en"):
+                system_instruction = (
+                    "You are an expert real-time speech transcriber and translator. "
+                    "Listen to the live audio stream. If speech is in Tamil or any other language, translate it into natural English in real time. "
+                    "If speech is already in English, transcribe it verbatim in English. "
+                    "Output ONLY the English transcript in real time without preamble or explanation."
+                )
+            else:
+                system_instruction = (
+                    "You are an expert real-time speech transcriber. "
+                    "Listen to the live audio stream and transcribe every word exactly as spoken. "
+                    "Support multilingual and code-mixed speech (e.g. Tamil + English, Hindi + English). "
+                    "Keep each language in its native script: write Tamil words in Tamil script, Hindi in Devanagari script, "
+                    "and English in Latin script. Output ONLY the verbatim spoken transcript."
+                )
 
             config = types.LiveConnectConfig(
                 response_modalities=[types.LiveServerContentModality.TEXT],

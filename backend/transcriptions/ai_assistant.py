@@ -24,12 +24,20 @@ def transcribe_audio_bytes(audio_bytes, mime_type="audio/webm", language="ta-IN"
         model_name = getattr(settings, 'GEMINI_TEXT_MODEL', 'gemini-1.5-flash')
 
         clean_mime = mime_type.split(';')[0] if mime_type else "audio/webm"
-        prompt = (
-            "Transcribe this audio recording exactly verbatim as spoken. "
-            "Keep each language in its native script: write Tamil in Tamil script (தமிழ்), "
-            "Hindi in Devanagari script (हिन्दी), and English in Latin script. "
-            "Output ONLY the verbatim transcription without preamble, quotes, or explanations."
-        )
+        if language and language.startswith('en'):
+            prompt = (
+                "Transcribe and translate this audio recording into English. "
+                "If speech is in Tamil or any other language, translate it accurately into natural English. "
+                "If speech is already in English, transcribe it verbatim in English. "
+                "Output ONLY the final English text without preamble, quotes, or explanations."
+            )
+        else:
+            prompt = (
+                "Transcribe this audio recording exactly verbatim as spoken. "
+                "Keep each language in its native script: write Tamil in Tamil script (தமிழ்), "
+                "Hindi in Devanagari script (हिन्दी), and English in Latin script. "
+                "Output ONLY the verbatim transcription without preamble, quotes, or explanations."
+            )
 
         response = client.models.generate_content(
             model=model_name,

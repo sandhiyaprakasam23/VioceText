@@ -54,7 +54,7 @@ export const RecordPage: React.FC<RecordPageProps> = ({
   onNavigateToHistory,
 }) => {
   const [selectedLanguage, setSelectedLanguage] = useState(
-    settings.default_language && settings.default_language !== 'en-IN' ? settings.default_language : 'ta-IN'
+    settings.default_language || 'en-IN'
   );
   const [activeEngine, setActiveEngine] = useState<EngineType>(settings.default_engine || 'browser-webspeech');
   const [engineFallbackNotice, setEngineFallbackNotice] = useState<string | null>(null);
@@ -130,6 +130,14 @@ export const RecordPage: React.FC<RecordPageProps> = ({
       transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [liveTranscript, isEditingTranscript]);
+
+  // Enforce 90-second recording limit
+  useEffect(() => {
+    if (duration >= 90 && (recordingState === 'recording' || isWebSpeechListening)) {
+      showToast('90-second recording limit reached.');
+      handleStopRecording();
+    }
+  }, [duration, recordingState, isWebSpeechListening]);
 
   // Connect / Manage WebSocket for Gemini Live API
   const connectGeminiWebSocket = useCallback((): Promise<boolean> => {

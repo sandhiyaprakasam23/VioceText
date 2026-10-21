@@ -195,6 +195,72 @@ class TranscriptionViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=["post"])
+    def translate(self, request):
+        """
+        Fast server-side translation proxy for real-time live streaming.
+        Supports automatic source language detection.
+        """
+        text = (request.data.get("text") or "").strip()
+        target_lang = (request.data.get("target_lang") or "en").strip()
+        source_lang = (request.data.get("source_lang") or "auto").strip()
+
+        clean_target = target_lang.split("-")[0].lower() if "-" in target_lang else target_lang.lower()
+        clean_source = source_lang.split("-")[0].lower() if "-" in source_lang else source_lang.lower()
+
+        if not text:
+            return Response({"translated_text": "", "target_lang": clean_target, "source_lang": clean_source})
+
+        # 1. Try Google Translate fast engine
+        try:
+            import urllib.request
+            import urllib.parse
+            import json
+
+            encoded = urllib.parse.quote(text)
+            url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={clean_source}&tl={clean_target}&dt=t&q={encoded}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data and isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                    translated = "".join([segment[0] for segment in data[0] if segment and len(segment) > 0 and segment[0]]).strip()
+                    if translated:
+                        detected_src = data[2] if len(data) > 2 and isinstance(data[2], str) else clean_source
+                        return Response({
+                            "translated_text": translated,
+                            "target_lang": clean_target,
+                            "source_lang": detected_src,
+                        })
+        except Exception:
+            pass
+
+        # 2. Fallback to MyMemory
+        try:
+            import urllib.request
+            import urllib.parse
+            import json
+
+            pair = f"{clean_source}|{clean_target}" if clean_source != "auto" else f"ta|{clean_target}"
+            url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(text)}&langpair={pair}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                translated = data.get("responseData", {}).get("translatedText")
+                if translated and not translated.startswith("MYMEMORY WARNING"):
+                    return Response({
+                        "translated_text": translated.strip(),
+                        "target_lang": clean_target,
+                        "source_lang": clean_source,
+                    })
+        except Exception:
+            pass
+
+        return Response({
+            "translated_text": text,
+            "target_lang": clean_target,
+            "source_lang": clean_source,
+        })
+
 
 class PublicTranscriptionView(APIView):
     """
