@@ -5,7 +5,7 @@ services:
     region: oregon
     plan: free
     buildCommand: bash backend/build.sh
-    startCommand: cd backend && daphne -b 0.0.0.0 -p $PORT voicetext.asgi:application
+    startCommand: cd backend && python manage.py migrate --no-input && daphne -b 0.0.0.0 -p $PORT voicetext.asgi:application
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
